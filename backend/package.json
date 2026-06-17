@@ -1,0 +1,19 @@
+{
+  "name": "auratalk-backend",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "packageManager": "npm@10",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "npm run --workspaces --if-present dev",
+    "build": "npm run --workspaces --if-present build",
+    "lint": "npm run --workspaces --if-present lint",
+    "typecheck": "npm run --workspaces --if-present typecheck"
+  }
+}
+

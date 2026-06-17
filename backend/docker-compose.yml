@@ -1,0 +1,124 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: auratalk
+      POSTGRES_PASSWORD: auratalk
+      POSTGRES_DB: auratalk
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auratalk -d auratalk"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  centrifugo:
+    image: centrifugo/centrifugo:v5
+    command:
+      - centrifugo
+      - --config=/centrifugo/config.json
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./infra/centrifugo/config.json:/centrifugo/config.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: ./apps/gateway/Dockerfile
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: gateway
+      PORT: 8082
+      LOG_LEVEL: info
+      AUTH_SERVICE_URL: http://auth-service:3001
+      USER_SERVICE_URL: http://user-service:3002
+      CHAT_RELAY_SERVICE_URL: http://chat-relay-service:3003
+    depends_on:
+      auth-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      chat-relay-service:
+        condition: service_started
+    ports:
+      - "8082:8082"
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: ./apps/auth-service/Dockerfile
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: auth-service
+      PORT: 3001
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://auratalk:auratalk@postgres:5432/auratalk
+      JWT_SECRET: change-me-change-me-change-me
+      DEV_OTP_ENABLED: "true"
+      DEV_OTP_CODE: "123456"
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  user-service:
+    build:
+      context: .
+      dockerfile: ./apps/user-service/Dockerfile
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: user-service
+      PORT: 3002
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://auratalk:auratalk@postgres:5432/auratalk
+      JWT_SECRET: change-me-change-me-change-me
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  chat-relay-service:
+    build:
+      context: .
+      dockerfile: ./apps/chat-relay-service/Dockerfile
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: chat-relay-service
+      PORT: 3003
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://auratalk:auratalk@postgres:5432/auratalk
+      JWT_SECRET: change-me-change-me-change-me
+      CENTRIFUGO_API_URL: http://centrifugo:8000/api
+      CENTRIFUGO_API_KEY: dev-change-me
+    depends_on:
+      postgres:
+        condition: service_healthy
+      centrifugo:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  redis_data:
+
