@@ -1,0 +1,35 @@
+name: mobile
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.11.0 <4.0.0"
+
+# Pinned to pubspec.lock — stable combo verified with Flutter 3.41 / Dart 3.11.
+# Do not use caret ranges on packages with frequent major bumps (livekit, secure_storage).
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: 1.0.9
+  flutter_riverpod: 3.3.2
+  dio: 5.9.2
+  flutter_secure_storage: 9.2.4
+  gap: 3.0.1
+  google_fonts: 6.3.3
+  uuid: 4.5.3
+  cryptography: 2.9.0
+  intl: 0.20.2
+  centrifuge: 0.20.0
+  livekit_client: 2.8.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: 6.0.0
+
+flutter:
+  uses-material-design: true

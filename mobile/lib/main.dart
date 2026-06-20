@@ -1,0 +1,16 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'app/app.dart';
+
+void main() {
+  runApp(const ProviderScope(child: _Root()));
+}
+
+class _Root extends StatelessWidget {
+  const _Root();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AuraApp();
+  }
+}

@@ -1,17 +1,16 @@
 {
-  "v3_use_offset": true,
+  "log_level": "info",
+  "allowed_origins": ["*"],
   "token_hmac_secret_key": "dev-change-me",
+  "api_key": "dev-change-me",
   "admin_password": "dev-change-me",
   "admin_secret": "dev-change-me",
-  "api_key": "dev-change-me",
-  "allowed_origins": ["*"],
-  "allow_subscribe_for_client": true,
-  "allow_publish_for_client": false,
-  "presence": true,
-  "history_size": 0,
-  "history_ttl": "0s",
-  "redis_address": "redis://redis:6379",
-  "http_server": true,
-  "http_port": "8000"
+  "namespaces": [
+    {
+      "name": "user",
+      "allow_subscribe_for_client": true,
+      "allow_publish_for_client": false,
+      "presence": true
+    }
+  ]
 }
-

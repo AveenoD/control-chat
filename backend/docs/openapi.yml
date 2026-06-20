@@ -1,9 +1,10 @@
 openapi: 3.0.3
 info:
-  title: AuraTalk Backend (Phase 1)
-  version: 0.1.0
+  title: AuraTalk Backend (Phase 1–2)
+  version: 0.2.0
   description: |
-    Consolidated OpenAPI spec for Phase 1 backend services.
+    Consolidated OpenAPI spec for AuraTalk backend services.
+    Phase 2 adds username identity, privacy settings, contacts, and message requests.
     NOTE: This backend stores encrypted message envelopes only (no plaintext messages).
 
 servers:
@@ -13,6 +14,8 @@ servers:
 tags:
   - name: auth
   - name: users
+  - name: contacts
+  - name: message-requests
   - name: chat
 
 components:
@@ -401,6 +404,13 @@ paths:
             default: 50
             minimum: 1
             maximum: 200
+        - in: query
+          name: after
+          required: false
+          description: Return messages created after this envelope UUID (incremental sync)
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
           description: Envelopes
@@ -442,4 +452,284 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /conversations/{conversationId}/delivery:
+    post:
+      tags: [chat]
+      summary: Delivery receipt — recipient device received message (ephemeral fan-out, no DB)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [envelopeId]
+              properties:
+                envelopeId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Delivery ack forwarded to sender via Centrifugo
+
+  /conversations/{conversationId}/typing:
+    post:
+      tags: [chat]
+      summary: Typing indicator (ephemeral fan-out, no DB)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [isTyping]
+              properties:
+                isTyping:
+                  type: boolean
+      responses:
+        "200":
+          description: Typing event forwarded
+
+  /conversations/{conversationId}/receipts:
+    post:
+      tags: [chat]
+      summary: Read receipt — recipient opened chat (persisted + fan-out)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [envelopeId]
+              properties:
+                envelopeId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Read receipt stored and forwarded
+
+  /conversations:
+    get:
+      tags: [chat]
+      summary: List 1:1 conversations for current user (JWT required)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Conversation summaries with last message ciphertext
+
+  /users/username/{username}/available:
+    get:
+      tags: [users]
+      summary: Check if username is available (JWT required)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: username
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Availability result
+
+  /users/by-username/{username}:
+    get:
+      tags: [users]
+      summary: Public profile by username — no phone (JWT required)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: username
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User profile
+        "404":
+          description: Not found
+
+  /me/onboarding:
+    post:
+      tags: [users]
+      summary: Complete onboarding with globally unique username (JWT required)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                displayName:
+                  type: string
+              required: [username, displayName]
+      responses:
+        "200":
+          description: Onboarding complete
+        "409":
+          description: Username taken
+
+  /me/privacy:
+    get:
+      tags: [users]
+      summary: Get privacy settings (JWT required)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Privacy settings
+    put:
+      tags: [users]
+      summary: Update privacy settings (JWT required)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties:
+                type: boolean
+      responses:
+        "200":
+          description: Updated
+
+  /contacts:
+    get:
+      tags: [contacts]
+      summary: List saved contacts (JWT required)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Contact list
+    post:
+      tags: [contacts]
+      summary: Add contact by userId or username (JWT required)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Contact added
+
+  /contacts/{contactUserId}:
+    delete:
+      tags: [contacts]
+      summary: Remove contact (JWT required)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: contactUserId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Removed
+
+  /contacts/can-message/{targetUserId}:
+    get:
+      tags: [contacts]
+      summary: Check direct-message permission (JWT required)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: targetUserId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: canMessage boolean
+
+  /message-requests:
+    post:
+      tags: [message-requests]
+      summary: Send message request to non-contact (JWT required)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Request created
+
+  /message-requests/incoming:
+    get:
+      tags: [message-requests]
+      summary: List incoming message requests (JWT required)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Request list
+
+  /message-requests/{requestId}/accept:
+    post:
+      tags: [message-requests]
+      summary: Accept message request (JWT required)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: requestId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Accepted
+
+  /message-requests/{requestId}/decline:
+    post:
+      tags: [message-requests]
+      summary: Decline message request (JWT required)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: requestId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Declined
 

@@ -64,6 +64,48 @@ await app.register(httpProxy, {
   rewritePrefix: "/users",
   replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
 });
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
+  prefix: "/contacts",
+  rewritePrefix: "/contacts",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
+  prefix: "/message-requests",
+  rewritePrefix: "/message-requests",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
+  prefix: "/realtime",
+  rewritePrefix: "/realtime",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
+  prefix: "/blocks",
+  rewritePrefix: "/blocks",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
+  prefix: "/reports",
+  rewritePrefix: "/reports",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
+  prefix: "/groups",
+  rewritePrefix: "/groups",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
+  prefix: "/calls",
+  rewritePrefix: "/calls",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
 
 // chat-relay-service
 await app.register(httpProxy, {

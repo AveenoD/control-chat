@@ -1,0 +1,347 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gap/gap.dart';
+import 'package:intl/intl.dart';
+
+import '../../../core/auth/session_provider.dart';
+import '../../../core/chat/chat_models.dart';
+import '../../../core/chat/chat_repository.dart';
+import '../../../core/realtime/chat_realtime_service.dart';
+import '../../chats/chat_thread_screen.dart';
+import '../../chats/create_group_screen.dart';
+import '../../chats/new_chat_screen.dart';
+
+class ChatsScreen extends ConsumerStatefulWidget {
+  const ChatsScreen({super.key});
+
+  @override
+  ConsumerState<ChatsScreen> createState() => _ChatsScreenState();
+}
+
+class _ChatsScreenState extends ConsumerState<ChatsScreen> {
+  List<ConversationSummary> _conversations = [];
+  bool _loading = true;
+  bool _refreshing = false;
+  String? _error;
+  Future<void>? _inFlight;
+  StreamSubscription<Map<String, dynamic>>? _realtimeSub;
+  Timer? _realtimeDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenRealtime();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadIfReady());
+  }
+
+  void _loadIfReady() {
+    final session = ref.read(sessionProvider);
+    if (session.isAuthenticated && !session.isLoading && _inFlight == null) {
+      _load(silent: _conversations.isNotEmpty);
+    }
+  }
+
+  void _listenRealtime() {
+    final realtime = ref.read(chatRealtimeProvider);
+    _realtimeSub = realtime.events.listen((_) {
+      _realtimeDebounce?.cancel();
+      _realtimeDebounce = Timer(const Duration(milliseconds: 400), () {
+        if (mounted) _load(silent: true);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    _realtimeDebounce?.cancel();
+    super.dispose();
+  }
+
+  String _friendlyError(Object e) {
+    final msg = e.toString();
+    if (msg.contains('receive timeout') || msg.contains('connection timeout')) {
+      return 'Network slow — tap ↻ to retry';
+    }
+    if (msg.contains('401') || msg.contains('Unauthorized')) {
+      return 'Session expired — pull to refresh or re-login';
+    }
+    return msg.replaceFirst('DioException [unknown]: ', '');
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (_inFlight != null) return _inFlight!;
+    _inFlight = _doLoad(silent: silent).whenComplete(() => _inFlight = null);
+    return _inFlight!;
+  }
+
+  Future<void> _doLoad({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        if (_conversations.isEmpty) {
+          _loading = true;
+        } else {
+          _refreshing = true;
+        }
+        _error = null;
+      });
+    }
+    try {
+      final list = await ref.read(chatRepositoryProvider).fetchConversations();
+      if (!mounted) return;
+      setState(() {
+        _conversations = list;
+        _loading = false;
+        _refreshing = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _error = _friendlyError(e);
+      });
+    }
+  }
+
+  String _formatTime(DateTime dt) {
+    final local = dt.toLocal();
+    final now = DateTime.now();
+    if (local.year == now.year && local.month == now.month && local.day == now.day) {
+      return DateFormat.jm().format(local);
+    }
+    if (now.difference(local).inDays < 7) {
+      return DateFormat.E().format(local);
+    }
+    return DateFormat.MMMd().format(local);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = ref.watch(sessionProvider);
+    ref.listen(sessionProvider, (prev, next) {
+      if (next.isAuthenticated && !next.isLoading) {
+        if (prev?.isLoading == true || prev == null || !prev.isAuthenticated) {
+          _load(silent: _conversations.isNotEmpty);
+        }
+      }
+    });
+
+    if (session.isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    final primary = Theme.of(context).colorScheme.primary;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('AuraTalk'),
+        actions: [
+          if (_refreshing)
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+            )
+          else
+            IconButton(onPressed: () => _load(silent: _conversations.isNotEmpty), icon: const Icon(Icons.refresh)),
+          const SizedBox(width: 6),
+        ],
+      ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'group',
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const CreateGroupScreen()),
+              );
+              await _load();
+            },
+            backgroundColor: Colors.white,
+            foregroundColor: primary,
+            child: const Icon(Icons.group_add_outlined),
+          ),
+          const Gap(12),
+          FloatingActionButton(
+            heroTag: 'chat',
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const NewChatScreen()),
+              );
+              await _load();
+            },
+            backgroundColor: primary,
+            foregroundColor: Colors.white,
+            child: const Icon(Icons.add),
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: _loading
+            ? ListView(children: const [SizedBox(height: 200), Center(child: CircularProgressIndicator())])
+            : _error != null
+                ? ListView(
+                    children: [
+                      const SizedBox(height: 120),
+                      Center(child: Text(_error!, textAlign: TextAlign.center)),
+                      const Gap(12),
+                      Center(child: FilledButton(onPressed: _load, child: const Text('Retry'))),
+                    ],
+                  )
+                : _conversations.isEmpty
+                    ? ListView(
+                        children: const [
+                          SizedBox(height: 120),
+                          Center(child: Text('No chats yet')),
+                          SizedBox(height: 8),
+                          Center(child: Text('Tap + to message a contact')),
+                        ],
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+                        itemCount: _conversations.length + 1,
+                        itemBuilder: (context, i) {
+                          if (i == 0) {
+                            return const Padding(
+                              padding: EdgeInsets.only(bottom: 12),
+                              child: _SearchBar(),
+                            );
+                          }
+                          final c = _conversations[i - 1];
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _ChatTile(
+                              name: c.peer.label,
+                              username: c.isGroup ? null : c.peer.username,
+                              message: c.lastPreview,
+                              time: _formatTime(c.lastAt),
+                              isGroup: c.isGroup,
+                              onTap: () async {
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => ChatThreadScreen(
+                                      conversationId: c.conversationId,
+                                      title: c.peer.label,
+                                      peerUserId: c.isGroup ? null : c.peer.userId,
+                                      groupId: c.groupId,
+                                      username: c.isGroup ? null : c.peer.username,
+                                      isGroup: c.isGroup,
+                                    ),
+                                  ),
+                                );
+                                await _load(silent: true);
+                              },
+                            ),
+                          );
+                        },
+                      ),
+      ),
+    );
+  }
+}
+
+class _SearchBar extends StatelessWidget {
+  const _SearchBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.search, color: Color(0xFF9AA3B2)),
+          Gap(10),
+          Expanded(
+            child: Text(
+              'Search',
+              style: TextStyle(color: Color(0xFF9AA3B2), fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatTile extends StatelessWidget {
+  const _ChatTile({
+    required this.name,
+    required this.message,
+    required this.time,
+    required this.onTap,
+    this.username,
+    this.isGroup = false,
+  });
+
+  final String name;
+  final String? username;
+  final String message;
+  final String time;
+  final VoidCallback onTap;
+  final bool isGroup;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: primary.withValues(alpha: 0.12),
+                child: Icon(isGroup ? Icons.groups_outlined : Icons.person_outline, color: primary),
+              ),
+              const Gap(12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            name,
+                            style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const Gap(10),
+                        Text(time, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: const Color(0xFF9AA3B2))),
+                      ],
+                    ),
+                    if (username != null) ...[
+                      const Gap(2),
+                      Text('@$username', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: primary)),
+                    ],
+                    const Gap(4),
+                    Text(
+                      message.isEmpty ? 'Start chatting' : message,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(color: const Color(0xFF6B7280)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

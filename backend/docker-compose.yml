@@ -30,7 +30,7 @@ services:
       retries: 30
 
   centrifugo:
-    image: centrifugo/centrifugo:v5
+    image: centrifugo/centrifugo:v5.4.9
     command:
       - centrifugo
       - --config=/centrifugo/config.json
@@ -41,6 +41,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  livekit:
+    image: livekit/livekit-server:v1.13.1
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
 
   gateway:
     build:
@@ -95,6 +103,12 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgres://auratalk:auratalk@postgres:5432/auratalk
       JWT_SECRET: change-me-change-me-change-me
+      CENTRIFUGO_TOKEN_SECRET: dev-change-me
+      CENTRIFUGO_API_URL: http://centrifugo:8000/api
+      CENTRIFUGO_API_KEY: dev-change-me
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      LIVEKIT_URL: ws://10.0.2.2:7880
     depends_on:
       postgres:
         condition: service_healthy

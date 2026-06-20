@@ -7,6 +7,8 @@ import { createLogger, makeHealth } from "@auratalk/shared";
 import { z } from "zod";
 import { loadUserConfig } from "./config.js";
 import { createDb } from "./db.js";
+import { registerPhase2Routes } from "./phase2-routes.js";
+import { registerPhase3Routes } from "./phase3-routes.js";
 
 const cfg = loadUserConfig();
 const logger = createLogger(cfg);
@@ -36,12 +38,31 @@ app.addHook("onRequest", async (req, reply) => {
 app.get("/me", async (req) => {
   const userId = (req.user as any).sub as string;
   const res = await db.query(
-    `SELECT id, phone, created_at FROM users WHERE id = $1`,
+    `
+    SELECT id, phone, username, display_name, avatar_url, privacy_settings,
+           onboarding_completed_at, created_at
+    FROM users WHERE id = $1
+    `,
     [userId]
   );
   const row = res.rows[0];
   if (!row) return { ok: false, error: "Not found" };
-  return { ok: true, user: row };
+  return {
+    ok: true,
+    user: {
+      ...row,
+      onboardingComplete: row.onboarding_completed_at != null && row.username != null
+    }
+  };
+});
+
+registerPhase2Routes(app, db, { centrifugoTokenSecret: cfg.CENTRIFUGO_TOKEN_SECRET });
+registerPhase3Routes(app, db, {
+  livekitApiKey: cfg.LIVEKIT_API_KEY,
+  livekitApiSecret: cfg.LIVEKIT_API_SECRET,
+  livekitUrl: cfg.LIVEKIT_URL,
+  centrifugoApiUrl: cfg.CENTRIFUGO_API_URL,
+  centrifugoApiKey: cfg.CENTRIFUGO_API_KEY
 });
 
 const updateProfileBody = z.object({
@@ -103,6 +124,7 @@ app.get("/users/:userId/devices/keys", async (req, reply) => {
     SELECT device_id, identity_key_public, registration_id, pre_key_bundle, updated_at
     FROM device_keys
     WHERE user_id = $1
+    ORDER BY updated_at DESC
     `,
     [params.userId]
   );
