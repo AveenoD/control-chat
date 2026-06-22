@@ -850,7 +850,9 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
             Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
 
-            if (_peerTyping && _typingEnabled)
+            // Whether we SEE the peer typing depends only on whether they chose
+            // to broadcast it — never on our own typing-privacy toggle.
+            if (_peerTyping)
 
               Text('typing…', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: primary, fontStyle: FontStyle.italic))
 
@@ -1005,7 +1007,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
                           ),
 
-                          if (_peerTyping && _typingEnabled)
+                          if (_peerTyping)
                             const Padding(
                               padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                               child: Align(
