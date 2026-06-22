@@ -10,6 +10,8 @@ import 'package:gap/gap.dart';
 
 import 'package:intl/intl.dart';
 
+import 'package:uuid/uuid.dart';
+
 
 
 import '../../core/auth/auth_repository.dart';
@@ -21,6 +23,10 @@ import '../../core/chat/chat_models.dart';
 import '../../core/chat/chat_repository.dart';
 
 import '../../core/chat/conversation_id.dart';
+
+import '../../core/chat/outbox_service.dart';
+
+import '../../core/db/message_store.dart';
 
 import '../../core/auth/session_provider.dart';
 
@@ -72,12 +78,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
   final _input = TextEditingController();
   final _scrollController = ScrollController();
+  final _uuid = const Uuid();
 
   List<ChatMessage> _messages = [];
 
   bool _loading = true;
-
-  bool _sending = false;
 
   String? _error;
 
@@ -96,7 +101,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
   StreamSubscription<Map<String, dynamic>>? _realtimeSub;
 
+  StreamSubscription<List<ChatMessage>>? _messagesSub;
+
   Future<void>? _inFlight;
+
+  int _lastCount = 0;
 
   final Set<String> _acknowledgedDelivery = {};
 
@@ -150,7 +159,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     _loadPrivacy();
 
-    _loadMessages();
+    // UI is a projection of the local DB → cached messages render instantly
+    // (offline-capable). The network sync below just writes into that DB.
+    _subscribeToStore();
+    _syncMessages();
+    _flushOutbox();
 
     _startRealtime();
 
@@ -233,8 +246,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     if (type == '__synced') {
       // WebSocket (re)subscribed — reconcile with backend once to fill any gap
-      // recovery couldn't cover. This is event-driven, not periodic polling.
-      _loadMessages(silent: true);
+      // recovery couldn't cover, and retry any queued outgoing messages.
+      // This is event-driven, not periodic polling.
+      _flushOutbox();
+      _syncMessages();
       return;
     }
 
@@ -272,20 +287,19 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     if (type == 'delivery') {
       if (convId != _conversationId) return;
-      _applyPeerStatus(
-        envelopeId: data['envelopeId'] as String?,
-        delivered: true,
-      );
+      final eid = data['envelopeId'] as String?;
+      if (eid != null) {
+        ref.read(messageStoreProvider).markStatusByServerId(convId!, eid, delivered: true);
+      }
       return;
     }
 
     if (type == 'receipt') {
       if (convId != _conversationId) return;
-      _applyPeerStatus(
-        envelopeId: data['envelopeId'] as String?,
-        delivered: true,
-        read: true,
-      );
+      final eid = data['envelopeId'] as String?;
+      if (eid != null) {
+        ref.read(messageStoreProvider).markStatusByServerId(convId!, eid, delivered: true, read: true);
+      }
       return;
     }
 
@@ -323,7 +337,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     if (senderId == null || ciphertext == null) {
 
-      _loadMessages(silent: true);
+      _syncMessages();
 
       return;
 
@@ -335,7 +349,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     if (senderId == myId) return;
 
-    // WS push received — merge immediately; poll remains backup.
+    // WS push received — decrypt and write into the local store; the watch
+    // stream renders it. The store is the single source of truth.
     final text = await ref.read(chatRepositoryProvider).decryptEnvelope(
 
           ciphertext: ciphertext,
@@ -354,59 +369,20 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     if (!mounted) return;
 
-    setState(() {
-
-      _messages = [
-
-        ..._messages,
-
-        ChatMessage(
-
-          id: envelopeId ?? 'rt-${DateTime.now().millisecondsSinceEpoch}',
-
-          conversationId: convId,
-
-          senderUserId: senderId,
-
-          text: text,
-
-          createdAt: DateTime.now(),
-
-          isMine: false,
-
-        ),
-
-      ];
-
-    });
-
-    _scrollToBottom();
+    await ref.read(messageStoreProvider).upsertServerMessage(
+      ChatMessage(
+        id: envelopeId ?? 'rt-${DateTime.now().millisecondsSinceEpoch}',
+        conversationId: convId,
+        senderUserId: senderId,
+        text: text,
+        createdAt: DateTime.now(),
+        isMine: false,
+        clientMessageId: data['clientMessageId'] as String?,
+      ),
+    );
 
     _maybeSendDeliveryReceipt(envelopeId);
     _maybeSendReadReceipt(envelopeId);
-  }
-
-
-
-  void _applyPeerStatus({
-    required String? envelopeId,
-    bool delivered = false,
-    bool read = false,
-  }) {
-    if (envelopeId == null || !mounted) return;
-    final idx = _messages.indexWhere((m) => m.id == envelopeId);
-    setState(() {
-      _messages = _messages.asMap().entries.map((entry) {
-        final m = entry.value;
-        if (!m.isMine) return m;
-        final match = (idx >= 0 && entry.key <= idx) || m.id == envelopeId;
-        if (!match) return m;
-        return m.copyWith(
-          deliveredToPeer: delivered || read || m.deliveredToPeer,
-          readByPeer: read || m.readByPeer,
-        );
-      }).toList();
-    });
   }
 
   void _maybeSendDeliveryReceipt(String? envelopeId) {
@@ -533,7 +509,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     if (state == AppLifecycleState.resumed && _conversationId != null) {
       // Re-establish the live socket and reconcile once on resume.
       _startRealtime();
-      _loadMessages(silent: true);
+      _syncMessages();
+      _flushOutbox();
 
     }
 
@@ -551,6 +528,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     _typingClearTimer?.cancel();
     _typingKeepAlive?.cancel();
     _realtimeSub?.cancel();
+    _messagesSub?.cancel();
 
     _input.removeListener(_onInputChanged);
 
@@ -598,17 +576,45 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
 
 
-  Future<void> _loadMessages({bool silent = false}) {
+  void _subscribeToStore() {
+    final convId = _conversationId;
+    if (convId == null) return;
+    _messagesSub?.cancel();
+    _messagesSub = ref.read(messageStoreProvider).watchMessages(convId).listen((msgs) {
+      if (!mounted) return;
+      final grew = msgs.length > _lastCount;
+      _lastCount = msgs.length;
+      setState(() {
+        _messages = msgs;
+        _loading = false;
+        if (_error != null && !_error!.contains('yourself')) _error = null;
+      });
+      if (grew) _scrollToBottom();
+      _sendReadReceiptsForLoaded();
+    });
+  }
+
+  /// Pull the recent window from the server into the local store. The UI
+  /// updates through the watch stream; this never blocks rendering.
+  Future<void> _syncMessages() {
     final convId = _conversationId;
     if (convId == null) return Future.value();
     if (_error != null && _error!.contains('yourself')) return Future.value();
+    if (_inFlight != null) return _inFlight!;
 
-    if (_inFlight != null) {
-      if (!silent) return _inFlight!;
-      return Future.value();
-    }
-
-    _inFlight = _doLoadMessages(convId, silent: silent).whenComplete(() {
+    _inFlight = ref.read(chatRepositoryProvider).syncConversation(convId).then((_) {
+      if (mounted) setState(() => _error = null);
+    }).catchError((Object e) {
+      // Only surface an error when we have nothing cached to show.
+      if (mounted && _messages.isEmpty) {
+        setState(() {
+          _loading = false;
+          _error = _friendlyError(e);
+        });
+      } else if (mounted) {
+        setState(() => _loading = false);
+      }
+    }).whenComplete(() {
       _inFlight = null;
     });
     return _inFlight!;
@@ -616,164 +622,74 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
 
 
-  Future<void> _doLoadMessages(String convId, {bool silent = false}) async {
-    try {
-      // Always fetch the recent window and merge by id. Incremental `after`
-      // misses peer messages that arrived while polling was blocked.
-      final fetched = await ref.read(chatRepositoryProvider).fetchMessages(convId);
-      if (!mounted) return;
-
-      if (silent && _messages.isNotEmpty) {
-        final ids = _messages.map((m) => m.id).toSet();
-        final merged = [..._messages, ...fetched.where((m) => !ids.contains(m.id))]
-          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-        if (merged.length == _messages.length) return;
-        setState(() {
-          _messages = merged;
-          _error = null;
-        });
-        _scrollToBottom();
-        _sendReadReceiptsForLoaded();
-        return;
-      }
-
-      setState(() {
-        _messages = fetched;
-        if (!silent) _loading = false;
-        _error = null;
-      });
-      _scrollToBottom(animated: !silent);
-      _sendReadReceiptsForLoaded();
-    } catch (e) {
-
-      if (!mounted) return;
-
-      if (!silent) {
-
-        setState(() {
-
-          _loading = false;
-
-          _error = _friendlyError(e);
-
-        });
-
-      }
-
-    }
-
-  }
-
-
-
   Future<void> _send() async {
-
     final text = _input.text.trim();
-
-    if (text.isEmpty || _sending || _conversationId == null) return;
-
+    if (text.isEmpty || _conversationId == null) return;
     final myId = ref.read(sessionProvider).userId!;
-
-    final optimistic = ChatMessage(
-
-      id: 'local-${DateTime.now().millisecondsSinceEpoch}',
-
-      conversationId: _conversationId!,
-
-      senderUserId: myId,
-
-      text: text,
-
-      createdAt: DateTime.now(),
-
-      isMine: true,
-
-    );
-
-
-
-    setState(() {
-
-      _sending = true;
-
-      _messages = [..._messages, optimistic];
-
-      _error = null;
-
-    });
-
-    _scrollToBottom();
+    final cmid = _uuid.v4();
+    final now = DateTime.now();
+    final store = ref.read(messageStoreProvider);
 
     _input.clear();
-
     if (_typingEnabled) {
-
       ref.read(chatRepositoryProvider).sendTyping(conversationId: _conversationId!, isTyping: false).catchError((_) {});
-
     }
 
+    // Write the optimistic message + the outbox entry to local storage *before*
+    // the network call. The watch stream renders it instantly, and a crash/kill
+    // or dead connection can never lose it — it will be retried.
+    await store.insertOptimistic(
+      clientMessageId: cmid,
+      conversationId: _conversationId!,
+      senderUserId: myId,
+      text: text,
+      createdAt: now,
+    );
+    await ref.read(chatRepositoryProvider).outbox.add(OutboxEntry(
+          clientMessageId: cmid,
+          conversationId: _conversationId!,
+          plaintext: text,
+          isGroup: _isGroup,
+          createdAt: now,
+          recipientUserId: _isGroup ? null : _peerUserId,
+          groupId: _isGroup ? _groupId : null,
+        ));
 
+    await _trySend(cmid, text);
+  }
 
+  Future<void> _trySend(String cmid, String text) async {
+    final repo = ref.read(chatRepositoryProvider);
+    final store = ref.read(messageStoreProvider);
     try {
-
       String envelopeId;
-
       if (_isGroup && _groupId != null) {
-
-        envelopeId = await ref.read(chatRepositoryProvider).sendGroupMessage(groupId: _groupId!, plaintext: text);
-
+        envelopeId = await repo.sendGroupMessage(groupId: _groupId!, plaintext: text, clientMessageId: cmid);
       } else if (_peerUserId != null) {
-
-        envelopeId = await ref.read(chatRepositoryProvider).sendMessage(
-
-              recipientUserId: _peerUserId!,
-
-              plaintext: text,
-
-            );
-
+        envelopeId = await repo.sendMessage(recipientUserId: _peerUserId!, plaintext: text, clientMessageId: cmid);
       } else {
-
         return;
-
       }
-
-      if (!mounted) return;
-
-      setState(() {
-
-        _messages = _messages
-            .map((m) => m.id == optimistic.id
-                ? m.copyWith(id: envelopeId)
-                : m)
-            .toList();
-
-      });
-
-    } catch (e) {
-
-      if (mounted) {
-
-        setState(() {
-
-          _messages = _messages.where((m) => m.id != optimistic.id).toList();
-
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-
-          SnackBar(content: Text(_friendlyError(e))),
-
-        );
-
-      }
-
-    } finally {
-
-      if (mounted) setState(() => _sending = false);
-
+      await repo.outbox.remove(cmid);
+      await store.confirmSent(cmid, envelopeId);
+    } catch (_) {
+      // Keep it in the outbox; mark failed so the user sees ⚠ and can tap to
+      // retry. It will also auto-retry on the next reconnect/app launch.
+      await store.markFailed(cmid, true);
     }
+  }
 
+  /// Manual retry from the failed-message UI.
+  Future<void> _retry(ChatMessage m) async {
+    if (m.clientMessageId == null) return;
+    await ref.read(messageStoreProvider).markFailed(m.clientMessageId!, false);
+    await _trySend(m.clientMessageId!, m.text);
+  }
+
+  /// Retry all queued sends (called on reconnect + app launch). The repository
+  /// confirms each one into the local store, so the watch stream updates ticks.
+  Future<void> _flushOutbox() async {
+    await ref.read(chatRepositoryProvider).flushOutbox();
   }
 
 
@@ -982,13 +898,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
               setState(() {
 
-                _loading = true;
-
                 _error = null;
 
               });
 
-              _loadMessages();
+              _syncMessages();
 
             },
 
@@ -1040,7 +954,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
                                   });
 
-                                  _loadMessages();
+                                  _syncMessages();
 
                                 },
 
@@ -1078,7 +992,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
                                 final m = _messages[i];
 
-                                return _Bubble(message: m, primary: primary, showSender: _isGroup && !m.isMine);
+                                return _Bubble(
+                                  message: m,
+                                  primary: primary,
+                                  showSender: _isGroup && !m.isMine,
+                                  onRetry: m.sendFailed ? () => _retry(m) : null,
+                                );
 
                               },
 
@@ -1143,21 +1062,9 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
                   IconButton.filled(
 
-                    onPressed: _sending ? null : _send,
+                    onPressed: _send,
 
-                    icon: _sending
-
-                        ? const SizedBox(
-
-                            width: 20,
-
-                            height: 20,
-
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-
-                          )
-
-                        : const Icon(Icons.send_rounded),
+                    icon: const Icon(Icons.send_rounded),
 
                   ),
 
@@ -1221,7 +1128,7 @@ class _TypingIndicatorState extends State<_TypingIndicator> {
 
 class _Bubble extends StatelessWidget {
 
-  const _Bubble({required this.message, required this.primary, this.showSender = false});
+  const _Bubble({required this.message, required this.primary, this.showSender = false, this.onRetry});
 
 
 
@@ -1230,6 +1137,8 @@ class _Bubble extends StatelessWidget {
   final Color primary;
 
   final bool showSender;
+
+  final VoidCallback? onRetry;
 
 
 
@@ -1240,11 +1149,7 @@ class _Bubble extends StatelessWidget {
     final time = DateFormat.jm().format(message.createdAt.toLocal());
     final (receipt, receiptColor) = _receiptStyle(message);
 
-    return Align(
-
-      alignment: message.isMine ? Alignment.centerRight : Alignment.centerLeft,
-
-      child: Container(
+    final bubble = Container(
 
         margin: const EdgeInsets.only(bottom: 8),
 
@@ -1292,11 +1197,28 @@ class _Bubble extends StatelessWidget {
               ),
             ),
 
+            if (message.sendFailed)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Not sent · tap to retry',
+                  style: TextStyle(fontSize: 10, color: message.isMine ? const Color(0xFFFFE1E1) : const Color(0xFFEF4444)),
+                ),
+              ),
+
           ],
 
         ),
 
-      ),
+      );
+
+    return Align(
+
+      alignment: message.isMine ? Alignment.centerRight : Alignment.centerLeft,
+
+      child: message.sendFailed && onRetry != null
+          ? GestureDetector(onTap: onRetry, child: bubble)
+          : bubble,
 
     );
 
@@ -1304,6 +1226,7 @@ class _Bubble extends StatelessWidget {
 
   (String, Color?) _receiptStyle(ChatMessage message) {
     if (!message.isMine) return ('', null);
+    if (message.sendFailed) return (' ⚠', const Color(0xFFFFD0D0));
     if (message.readByPeer) return (' ✓✓', const Color(0xFF93C5FD));
     if (message.deliveredToPeer) return (' ✓✓', Colors.white70);
     if (message.confirmedOnServer) return (' ✓', Colors.white70);

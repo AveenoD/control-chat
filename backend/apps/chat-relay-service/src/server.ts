@@ -348,6 +348,20 @@ app.post("/messages", async (req: any, reply: any) => {
 
 
 
+    // Idempotency: a retried send (same client_message_id) must not create a
+    // duplicate. Return the already-stored envelope instead of inserting again.
+    if (body.clientMessageId) {
+      const dup = await db.query<{ id: string }>(
+        `SELECT id FROM message_envelopes
+         WHERE conversation_id = $1 AND sender_user_id = $2 AND client_message_id = $3
+         LIMIT 1`,
+        [body.conversationId, senderUserId, body.clientMessageId]
+      );
+      if (dup.rows[0]) {
+        return reply.send({ ok: true, envelopeId: dup.rows[0].id, deduped: true });
+      }
+    }
+
     const deviceRes = await db.query(
 
       `SELECT 1 FROM device_keys WHERE user_id = $1 AND device_id = $2 LIMIT 1`,
@@ -436,6 +450,19 @@ app.post("/messages", async (req: any, reply: any) => {
   }
 
 
+
+  // Idempotency for group retries — same client_message_id was already fanned out.
+  if (body.clientMessageId) {
+    const dup = await db.query<{ client_message_id: string }>(
+      `SELECT client_message_id FROM message_envelopes
+       WHERE conversation_id = $1 AND sender_user_id = $2 AND client_message_id = $3
+       LIMIT 1`,
+      [body.conversationId, senderUserId, body.clientMessageId]
+    );
+    if (dup.rows[0]) {
+      return reply.send({ ok: true, envelopeId: body.clientMessageId, deduped: true });
+    }
+  }
 
   const memberIds = await listGroupMemberUserIds(db, groupId);
   const allDevices = await listMemberDevices(db, memberIds);

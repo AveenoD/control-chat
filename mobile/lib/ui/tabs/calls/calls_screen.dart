@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
@@ -15,31 +17,43 @@ class CallsScreen extends ConsumerStatefulWidget {
 class _CallsScreenState extends ConsumerState<CallsScreen> {
   List<CallHistoryEntry> _calls = [];
   bool _loading = true;
-  String? _error;
+  bool _offline = false;
+  StreamSubscription<List<CallHistoryEntry>>? _sub;
 
   @override
   void initState() {
     super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final list = await ref.read(callRepositoryProvider).fetchHistory();
+    // Render cached call log instantly (offline-capable); refresh in background.
+    _sub = ref.read(callRepositoryProvider).watchHistory().listen((list) {
       if (!mounted) return;
       setState(() {
         _calls = list;
         _loading = false;
       });
-    } catch (e) {
+    });
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      // Writes into the local store; the watch stream updates the list.
+      await ref.read(callRepositoryProvider).fetchHistory();
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _offline = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _offline = true;
       });
     }
   }
@@ -66,28 +80,48 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
           const SizedBox(width: 6),
         ],
       ),
-      body: _loading
+      body: _loading && _calls.isEmpty
           ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(child: Text(_error!, textAlign: TextAlign.center))
-              : _calls.isEmpty
-                  ? const Center(child: Text('No calls yet — start one from a chat'))
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-                      itemCount: _calls.length,
-                      itemBuilder: (context, i) {
-                        final c = _calls[i];
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: _CallTile(
-                            name: c.peerLabel ?? 'Unknown',
-                            time: _formatTime(c.startedAt),
-                            isVideo: c.callType == 'video',
-                            status: c.status,
-                          ),
-                        );
-                      },
+          : _calls.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(_offline ? Icons.cloud_off_outlined : Icons.call_outlined,
+                            size: 40, color: const Color(0xFF9AA3B2)),
+                        const Gap(12),
+                        Text(
+                          _offline
+                              ? "You're offline — call history will sync when you reconnect"
+                              : 'No calls yet — start one from a chat',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFF6B7280)),
+                        ),
+                      ],
                     ),
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+                    itemCount: _calls.length,
+                    itemBuilder: (context, i) {
+                      final c = _calls[i];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _CallTile(
+                          name: c.peerLabel ?? 'Unknown',
+                          time: _formatTime(c.startedAt),
+                          isVideo: c.callType == 'video',
+                          status: c.status,
+                        ),
+                      );
+                    },
+                  ),
+                ),
     );
   }
 }

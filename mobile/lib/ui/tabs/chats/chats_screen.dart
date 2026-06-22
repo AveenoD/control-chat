@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../../core/auth/session_provider.dart';
 import '../../../core/chat/chat_models.dart';
 import '../../../core/chat/chat_repository.dart';
+import '../../../core/db/message_store.dart';
 import '../../../core/realtime/chat_realtime_service.dart';
 import '../../chats/chat_thread_screen.dart';
 import '../../chats/create_group_screen.dart';
@@ -27,13 +28,27 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
   String? _error;
   Future<void>? _inFlight;
   StreamSubscription<Map<String, dynamic>>? _realtimeSub;
+  StreamSubscription<List<ConversationSummary>>? _convSub;
   Timer? _realtimeDebounce;
 
   @override
   void initState() {
     super.initState();
+    _subscribeToStore();
     _listenRealtime();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadIfReady());
+  }
+
+  void _subscribeToStore() {
+    // Render cached conversations instantly (offline-capable); the network
+    // refresh below just writes into the same store, which re-emits here.
+    _convSub = ref.read(messageStoreProvider).watchConversations().listen((list) {
+      if (!mounted) return;
+      setState(() {
+        _conversations = list;
+        if (list.isNotEmpty) _loading = false;
+      });
+    });
   }
 
   void _loadIfReady() {
@@ -56,6 +71,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
   @override
   void dispose() {
     _realtimeSub?.cancel();
+    _convSub?.cancel();
     _realtimeDebounce?.cancel();
     super.dispose();
   }
@@ -89,10 +105,10 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
       });
     }
     try {
-      final list = await ref.read(chatRepositoryProvider).fetchConversations();
+      // Writes into the local store; the watch stream updates _conversations.
+      await ref.read(chatRepositoryProvider).fetchConversations();
       if (!mounted) return;
       setState(() {
-        _conversations = list;
         _loading = false;
         _refreshing = false;
       });
@@ -101,7 +117,8 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
       setState(() {
         _loading = false;
         _refreshing = false;
-        _error = _friendlyError(e);
+        // Keep showing cached chats if we have them; only error when empty.
+        if (_conversations.isEmpty) _error = _friendlyError(e);
       });
     }
   }
