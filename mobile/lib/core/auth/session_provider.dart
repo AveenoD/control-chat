@@ -154,7 +154,14 @@ class SessionNotifier extends Notifier<AuthSession> {
   }
 
   Future<void> logout() async {
-    await _storage.deleteAll();
+    // Keep the device's E2EE identity key + deviceId across logout so the
+    // same device can still decrypt its message history on re-login (WhatsApp
+    // behaviour). Only auth credentials are cleared. A new account on the same
+    // device reuses the deviceId, upserting its key over the same row — so we
+    // never accumulate orphaned dead keys.
+    await _storage.delete(key: _tokenKey);
+    await _storage.delete(key: _refreshKey);
+    await _storage.delete(key: _userIdKey);
     state = const AuthSession(isLoading: false);
   }
 }

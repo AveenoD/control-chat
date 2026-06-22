@@ -90,7 +90,11 @@ class ChatRepository {
             senderDeviceId: row['sender_device_id'] as String,
             peerUserId: peerId,
           );
-      _decryptedTextCache[messageId] = text;
+      // Only cache successful decryptions — never the failure sentinel, so a
+      // transient key miss can recover on the next poll.
+      if (!text.startsWith('🔒')) {
+        _decryptedTextCache[messageId] = text;
+      }
       out.add(
         ChatMessage(
           id: row['id'] as String,

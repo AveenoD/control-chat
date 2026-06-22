@@ -264,21 +264,28 @@ app.get("/conversations/:conversationId/messages", async (req: any) => {
 
 
 
+  // Return the NEWEST `limit` messages (not the oldest). We fetch the latest
+  // rows with ORDER BY created_at DESC + LIMIT, then re-sort ASC for display.
+  // With ORDER BY ASC + LIMIT the query would only ever return the first N
+  // messages of the thread, so new messages beyond N were never delivered.
   const res = await db.query(
     `
-    SELECT id, conversation_id, sender_user_id, sender_device_id, ciphertext, created_at, client_message_id
-    FROM message_envelopes
-    WHERE conversation_id = $1
-      AND (recipient_user_id = $2 OR sender_user_id = $2)
-      AND (
-        $4::uuid IS NULL
-        OR created_at > COALESCE(
-          (SELECT created_at FROM message_envelopes WHERE id = $4 AND conversation_id = $1 LIMIT 1),
-          '-infinity'::timestamptz
+    SELECT * FROM (
+      SELECT id, conversation_id, sender_user_id, sender_device_id, ciphertext, created_at, client_message_id
+      FROM message_envelopes
+      WHERE conversation_id = $1
+        AND (recipient_user_id = $2 OR sender_user_id = $2)
+        AND (
+          $4::uuid IS NULL
+          OR created_at > COALESCE(
+            (SELECT created_at FROM message_envelopes WHERE id = $4 AND conversation_id = $1 LIMIT 1),
+            '-infinity'::timestamptz
+          )
         )
-      )
+      ORDER BY created_at DESC
+      LIMIT $3
+    ) recent
     ORDER BY created_at ASC
-    LIMIT $3
     `,
     [params.conversationId, userId, query.limit, query.after ?? null]
   );
@@ -439,43 +446,36 @@ app.post("/messages", async (req: any, reply: any) => {
   const pushDevices = allDevices.filter((d) => d.userId !== senderUserId);
 
   const envelopeId = randomUUID();
-  for (const d of allDevices) {
+  const clientMsgId = body.clientMessageId ?? envelopeId;
 
-    await db.query(
+  // Single multi-row INSERT — one DB round trip for the whole group fan-out
+  // instead of one round trip per device (Culprit #1).
+  const cols = 7;
+  const valuesSql = allDevices
+    .map((_, i) => {
+      const b = i * cols;
+      return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7})`;
+    })
+    .join(",");
+  const params = allDevices.flatMap((d) => [
+    body.conversationId,
+    senderUserId,
+    senderDeviceId,
+    d.userId,
+    d.deviceId,
+    body.ciphertext,
+    clientMsgId
+  ]);
 
-      `
-
-      INSERT INTO message_envelopes (
-
-        conversation_id, sender_user_id, sender_device_id,
-
-        recipient_user_id, recipient_device_id, ciphertext, client_message_id
-
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7)
-
-      `,
-
-      [
-
-        body.conversationId,
-
-        senderUserId,
-
-        senderDeviceId,
-
-        d.userId,
-
-        d.deviceId,
-
-        body.ciphertext,
-
-        body.clientMessageId ?? envelopeId
-
-      ]
-
-    );
-
-  }
+  await db.query(
+    `
+    INSERT INTO message_envelopes (
+      conversation_id, sender_user_id, sender_device_id,
+      recipient_user_id, recipient_device_id, ciphertext, client_message_id
+    ) VALUES ${valuesSql}
+    `,
+    params
+  );
 
 
 
@@ -576,7 +576,7 @@ app.post("/conversations/:conversationId/typing", async (req: any, reply: any) =
 
       isTyping: body.isTyping
 
-    }).catch(() => {});
+    }, { skipHistory: true }).catch(() => {});
 
   }
 
@@ -660,7 +660,7 @@ app.post("/conversations/:conversationId/delivery", async (req: any, reply: any)
 
       deliveredAt
 
-    }).catch(() => {});
+    }, { skipHistory: true }).catch(() => {});
 
   }
 
@@ -750,7 +750,7 @@ app.post("/conversations/:conversationId/receipts", async (req: any, reply: any)
 
       readAt
 
-    }).catch(() => {});
+    }, { skipHistory: true }).catch(() => {});
 
   }
 

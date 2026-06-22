@@ -31,6 +31,7 @@ class ChatRealtimeService {
   StreamSubscription<SubscriptionErrorEvent>? _errorSub;
   StreamSubscription<PublicationEvent>? _publicationSub;
   StreamSubscription<ServerPublicationEvent>? _serverPublicationSub;
+  StreamSubscription<SubscribedEvent>? _subscribedSub;
   StreamSubscription<DisconnectedEvent>? _disconnectSub;
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   bool _connected = false;
@@ -41,6 +42,16 @@ class ChatRealtimeService {
   Timer? _reconnectTimer;
   Future<void>? _connectFuture;
   int _reconnectAttempt = 0;
+
+  Future<String> _fetchRealtimeToken() async {
+    final token = _accessToken;
+    if (token == null) throw StateError('No access token for realtime');
+    final res = await _tokenDio.get<Map<String, dynamic>>(
+      '/realtime/token',
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    return res.data!['token'] as String;
+  }
 
   Stream<Map<String, dynamic>> get events => _events.stream;
   bool get isConnected => _connected;
@@ -83,6 +94,7 @@ class ChatRealtimeService {
     _connected = false;
     await _publicationSub?.cancel();
     await _serverPublicationSub?.cancel();
+    await _subscribedSub?.cancel();
     await _errorSub?.cancel();
     await _disconnectSub?.cancel();
     if (_subscription != null) {
@@ -101,7 +113,15 @@ class ChatRealtimeService {
 
     _client = createClient(
       ApiConfig.centrifugoWsUrl,
-      ClientConfig(token: token),
+      ClientConfig(
+        token: token,
+        // Re-fetch a fresh token on every (re)connect so a backgrounded
+        // socket can wake without a manual teardown.
+        getToken: (_) => _fetchRealtimeToken(),
+        timeout: const Duration(seconds: 5),
+        minReconnectDelay: const Duration(milliseconds: 500),
+        maxReconnectDelay: const Duration(seconds: 5),
+      ),
     );
     _disconnectSub = _client!.disconnected.listen((_) {
       _connected = false;
@@ -111,13 +131,26 @@ class ChatRealtimeService {
 
     await _client!.connect().timeout(const Duration(seconds: 8));
 
-    _subscription = _client!.newSubscription(serverChannel);
+    _subscription = _client!.newSubscription(
+      serverChannel,
+      SubscriptionConfig(recoverable: true, positioned: true),
+    );
     _errorSub = _subscription!.error.listen((event) {
       final msg = event.error.toString().toLowerCase();
       if (msg.contains('already subscribed') || msg.contains('105')) return;
       _connected = false;
     });
     _publicationSub = _subscription!.publication.listen(_onPublication);
+    // On every (re)subscribe, signal listeners to reconcile with the backend.
+    // Centrifugo recovery replays missed messages within the history window;
+    // this synthetic event covers the gap when recovery wasn't possible.
+    _subscribedSub = _subscription!.subscribed.listen((event) {
+      _events.add({
+        'type': '__synced',
+        'recovered': event.recovered,
+        'wasRecovering': event.wasRecovering,
+      });
+    });
 
     try {
       await _subscription!.subscribe();
@@ -187,6 +220,7 @@ class ChatRealtimeService {
     _reconnectTimer?.cancel();
     await _publicationSub?.cancel();
     await _serverPublicationSub?.cancel();
+    await _subscribedSub?.cancel();
     await _errorSub?.cancel();
     await _disconnectSub?.cancel();
     if (_subscription != null) {

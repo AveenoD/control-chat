@@ -89,8 +89,6 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
   bool _isGroup = false;
 
-  Timer? _pollTimer;
-
   Timer? _typingDebounce;
 
   Timer? _typingClearTimer;
@@ -155,8 +153,6 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     _loadMessages();
 
     _startRealtime();
-
-    _startPolling();
 
     _input.addListener(_onInputChanged);
 
@@ -234,6 +230,13 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     final convId = data['conversationId'] as String?;
 
 
+
+    if (type == '__synced') {
+      // WebSocket (re)subscribed — reconcile with backend once to fill any gap
+      // recovery couldn't cover. This is event-driven, not periodic polling.
+      _loadMessages(silent: true);
+      return;
+    }
 
     if (type == 'typing') {
 
@@ -523,31 +526,13 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
 
 
-  void _startPolling() {
-    _pollTimer?.cancel();
-    _schedulePollTick();
-  }
-
-  void _schedulePollTick() {
-    _pollTimer = Timer(const Duration(seconds: 3), () {
-      if (!mounted) return;
-      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
-        _schedulePollTick();
-        return;
-      }
-      _loadMessages(silent: true);
-      _schedulePollTick();
-    });
-  }
-
-
-
   @override
 
   void didChangeAppLifecycleState(AppLifecycleState state) {
 
     if (state == AppLifecycleState.resumed && _conversationId != null) {
-
+      // Re-establish the live socket and reconcile once on resume.
+      _startRealtime();
       _loadMessages(silent: true);
 
     }
@@ -561,8 +546,6 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
   void dispose() {
 
     WidgetsBinding.instance.removeObserver(this);
-
-    _pollTimer?.cancel();
 
     _typingDebounce?.cancel();
     _typingClearTimer?.cancel();
@@ -642,7 +625,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
       if (silent && _messages.isNotEmpty) {
         final ids = _messages.map((m) => m.id).toSet();
-        final merged = [..._messages, ...fetched.where((m) => !ids.contains(m.id))];
+        final merged = [..._messages, ...fetched.where((m) => !ids.contains(m.id))]
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
         if (merged.length == _messages.length) return;
         setState(() {
           _messages = merged;

@@ -10,7 +10,10 @@
       "name": "user",
       "allow_subscribe_for_client": true,
       "allow_publish_for_client": false,
-      "presence": true
+      "presence": true,
+      "history_size": 100,
+      "history_ttl": "300s",
+      "force_recovery": true
     }
   ]
 }
