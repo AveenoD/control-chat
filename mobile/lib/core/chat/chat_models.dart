@@ -58,6 +58,9 @@ class ChatMessage {
     this.senderLabel,
     this.clientMessageId,
     this.sendFailed = false,
+    this.viewOnce = false,
+    this.viewed = false,
+    this.expiresAt,
   });
 
   final String id;
@@ -75,6 +78,12 @@ class ChatMessage {
   final String? clientMessageId;
   /// Send failed and the message is queued in the outbox for retry.
   final bool sendFailed;
+  /// One-time view — the body is wiped locally once the recipient opens it.
+  final bool viewOnce;
+  /// A view-once message that has already been opened (body consumed).
+  final bool viewed;
+  /// Disappearing-message expiry; the message is auto-deleted after this.
+  final DateTime? expiresAt;
 
   bool get confirmedOnServer => !id.startsWith('local-');
 
@@ -90,6 +99,9 @@ class ChatMessage {
     String? senderLabel,
     String? clientMessageId,
     bool? sendFailed,
+    bool? viewOnce,
+    bool? viewed,
+    DateTime? expiresAt,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -103,6 +115,9 @@ class ChatMessage {
       senderLabel: senderLabel ?? this.senderLabel,
       clientMessageId: clientMessageId ?? this.clientMessageId,
       sendFailed: sendFailed ?? this.sendFailed,
+      viewOnce: viewOnce ?? this.viewOnce,
+      viewed: viewed ?? this.viewed,
+      expiresAt: expiresAt ?? this.expiresAt,
     );
   }
 }

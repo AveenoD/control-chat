@@ -15,6 +15,8 @@ class OutboxEntry {
     this.recipientUserId,
     this.groupId,
     this.attempts = 0,
+    this.viewOnce = false,
+    this.ttlSeconds = 0,
   });
 
   final String clientMessageId;
@@ -26,6 +28,12 @@ class OutboxEntry {
   final String? groupId;
   int attempts;
 
+  /// Send as a one-time-view message.
+  final bool viewOnce;
+
+  /// Disappearing TTL in seconds (0 = none) applied to this message.
+  final int ttlSeconds;
+
   Map<String, dynamic> toJson() => {
         'clientMessageId': clientMessageId,
         'conversationId': conversationId,
@@ -35,6 +43,8 @@ class OutboxEntry {
         'recipientUserId': recipientUserId,
         'groupId': groupId,
         'attempts': attempts,
+        'viewOnce': viewOnce,
+        'ttlSeconds': ttlSeconds,
       };
 
   factory OutboxEntry.fromJson(Map<String, dynamic> json) => OutboxEntry(
@@ -46,6 +56,8 @@ class OutboxEntry {
         recipientUserId: json['recipientUserId'] as String?,
         groupId: json['groupId'] as String?,
         attempts: json['attempts'] as int? ?? 0,
+        viewOnce: json['viewOnce'] as bool? ?? false,
+        ttlSeconds: json['ttlSeconds'] as int? ?? 0,
       );
 }
 

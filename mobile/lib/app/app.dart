@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../theme/aura_theme.dart';
 import '../ui/auth/auth_flow.dart';
+import '../ui/security/privacy_shield.dart';
 
 class AuraApp extends ConsumerWidget {
   const AuraApp({super.key});
@@ -13,6 +14,7 @@ class AuraApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       title: 'AuraTalk',
       theme: AuraTheme.light(),
+      builder: (context, child) => PrivacyShield(child: child ?? const SizedBox.shrink()),
       home: const AppGate(),
     );
   }

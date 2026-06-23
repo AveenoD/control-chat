@@ -107,15 +107,30 @@ const centrifugoCfg =
 
 
 
+const envelopeItem = z.object({
+
+  recipientUserId: z.string().uuid(),
+
+  recipientDeviceId: z.string().min(8).max(128),
+
+  ciphertext: z.string().min(16).max(200_000)
+
+});
+
 const sendBody = z.object({
 
   conversationId: z.string().min(8).max(128),
 
+  // Legacy single-recipient form (still used by group sends, which carry one
+  // shared-group-key ciphertext).
   recipientUserId: z.string().uuid().optional(),
 
   recipientDeviceId: z.string().min(8).max(128).optional(),
 
-  ciphertext: z.string().min(16).max(200_000),
+  ciphertext: z.string().min(16).max(200_000).optional(),
+
+  // Multi-device DM form: one ciphertext per destination device.
+  envelopes: z.array(envelopeItem).min(1).max(50).optional(),
 
   clientMessageId: z.string().min(8).max(128).optional()
 
@@ -227,6 +242,8 @@ app.get("/conversations/:conversationId/messages", async (req: any) => {
 
   const userId = req.user.sub as string;
 
+  const deviceId = req.user.deviceId as string;
+
   const params = z.object({ conversationId: z.string().min(8).max(128) }).parse(req.params);
 
   const query = z
@@ -264,21 +281,27 @@ app.get("/conversations/:conversationId/messages", async (req: any) => {
 
 
 
-  // Return the NEWEST `limit` messages (not the oldest). We fetch the latest
-  // rows with ORDER BY created_at DESC + LIMIT, then re-sort ASC for display.
-  // With ORDER BY ASC + LIMIT the query would only ever return the first N
-  // messages of the thread, so new messages beyond N were never delivered.
+  // Device-scoped read: each device pulls only the envelopes addressed to IT
+  // (its own decryptable copy). This is what makes multi-device E2EE correct —
+  // a device never sees copies meant for a different (or stale) device, so it
+  // never shows spurious "unable to decrypt". `message_id` is the stable
+  // logical id shared across a message's per-device copies.
+  //
+  // Return the NEWEST `limit` messages, then re-sort ASC for display.
   const res = await db.query(
     `
     SELECT * FROM (
-      SELECT id, conversation_id, sender_user_id, sender_device_id, ciphertext, created_at, client_message_id
+      SELECT message_id AS id, conversation_id, sender_user_id, sender_device_id,
+             ciphertext, created_at, client_message_id
       FROM message_envelopes
       WHERE conversation_id = $1
-        AND (recipient_user_id = $2 OR sender_user_id = $2)
+        AND recipient_user_id = $2
+        AND recipient_device_id = $5
         AND (
           $4::uuid IS NULL
           OR created_at > COALESCE(
-            (SELECT created_at FROM message_envelopes WHERE id = $4 AND conversation_id = $1 LIMIT 1),
+            (SELECT created_at FROM message_envelopes
+             WHERE message_id = $4 AND conversation_id = $1 LIMIT 1),
             '-infinity'::timestamptz
           )
         )
@@ -287,7 +310,7 @@ app.get("/conversations/:conversationId/messages", async (req: any) => {
     ) recent
     ORDER BY created_at ASC
     `,
-    [params.conversationId, userId, query.limit, query.after ?? null]
+    [params.conversationId, userId, query.limit, query.after ?? null, deviceId]
   );
 
 
@@ -316,13 +339,38 @@ app.post("/messages", async (req: any, reply: any) => {
 
   if (parsed.kind === "dm") {
 
-    if (!body.recipientUserId || !body.recipientDeviceId) {
+    // Build the per-device envelope list. New clients send `envelopes[]`
+    // (one ciphertext per destination device); fall back to the legacy single
+    // form for older callers.
+    const envelopes =
+      body.envelopes ??
+      (body.recipientUserId && body.recipientDeviceId && body.ciphertext
+        ? [
+            {
+              recipientUserId: body.recipientUserId,
+              recipientDeviceId: body.recipientDeviceId,
+              ciphertext: body.ciphertext
+            }
+          ]
+        : null);
 
-      return reply.code(400).send({ ok: false, error: "recipientUserId and recipientDeviceId required" });
+    if (!envelopes || envelopes.length === 0) {
+
+      return reply.code(400).send({ ok: false, error: "envelopes required" });
 
     }
 
-    const expectedConversationId = directConversationId(senderUserId, body.recipientUserId);
+    // The DM peer is the single non-sender recipient referenced by the
+    // conversation id; self-copies (recipient == sender) are for multi-device.
+    const peerUserId = peerUserIdFromConversation(body.conversationId, senderUserId);
+
+    if (!peerUserId) {
+
+      return reply.code(400).send({ ok: false, error: "Invalid conversationId" });
+
+    }
+
+    const expectedConversationId = directConversationId(senderUserId, peerUserId);
 
     if (body.conversationId !== expectedConversationId) {
 
@@ -330,7 +378,18 @@ app.post("/messages", async (req: any, reply: any) => {
 
     }
 
-    const allowed = await canDirectMessage(db, senderUserId, body.recipientUserId);
+    // Every envelope must target either the peer or the sender themselves.
+    for (const e of envelopes) {
+
+      if (e.recipientUserId !== peerUserId && e.recipientUserId !== senderUserId) {
+
+        return reply.code(400).send({ ok: false, error: "Envelope recipient not in conversation" });
+
+      }
+
+    }
+
+    const allowed = await canDirectMessage(db, senderUserId, peerUserId);
 
     if (!allowed) {
 
@@ -349,36 +408,42 @@ app.post("/messages", async (req: any, reply: any) => {
 
 
     // Idempotency: a retried send (same client_message_id) must not create a
-    // duplicate. Return the already-stored envelope instead of inserting again.
+    // duplicate. Return the already-stored logical message instead.
     if (body.clientMessageId) {
-      const dup = await db.query<{ id: string }>(
-        `SELECT id FROM message_envelopes
+      const dup = await db.query<{ message_id: string }>(
+        `SELECT message_id FROM message_envelopes
          WHERE conversation_id = $1 AND sender_user_id = $2 AND client_message_id = $3
          LIMIT 1`,
         [body.conversationId, senderUserId, body.clientMessageId]
       );
       if (dup.rows[0]) {
-        return reply.send({ ok: true, envelopeId: dup.rows[0].id, deduped: true });
+        return reply.send({ ok: true, envelopeId: dup.rows[0].message_id, deduped: true });
       }
     }
 
-    const deviceRes = await db.query(
+    // One logical message id shared across all per-device copies.
+    const messageId = randomUUID();
+    const clientMsgId = body.clientMessageId ?? messageId;
 
-      `SELECT 1 FROM device_keys WHERE user_id = $1 AND device_id = $2 LIMIT 1`,
+    const cols = 8;
+    const valuesSql = envelopes
+      .map((_, i) => {
+        const b = i * cols;
+        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8})`;
+      })
+      .join(",");
+    const params = envelopes.flatMap((e) => [
+      body.conversationId,
+      senderUserId,
+      senderDeviceId,
+      e.recipientUserId,
+      e.recipientDeviceId,
+      e.ciphertext,
+      clientMsgId,
+      messageId
+    ]);
 
-      [body.recipientUserId, body.recipientDeviceId]
-
-    );
-
-    if (deviceRes.rowCount === 0) {
-
-      return reply.code(400).send({ ok: false, error: "Recipient device not registered" });
-
-    }
-
-
-
-    const res = await db.query<{ id: string }>(
+    await db.query(
 
       `
 
@@ -386,54 +451,44 @@ app.post("/messages", async (req: any, reply: any) => {
 
         conversation_id, sender_user_id, sender_device_id,
 
-        recipient_user_id, recipient_device_id, ciphertext, client_message_id
+        recipient_user_id, recipient_device_id, ciphertext, client_message_id, message_id
 
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7)
-
-      RETURNING id
+      ) VALUES ${valuesSql}
 
       `,
 
-      [
-
-        body.conversationId,
-
-        senderUserId,
-
-        senderDeviceId,
-
-        body.recipientUserId,
-
-        body.recipientDeviceId,
-
-        body.ciphertext,
-
-        body.clientMessageId ?? null
-
-      ]
+      params
 
     );
 
 
 
     if (centrifugoCfg) {
-      const recipientDevices = await listMemberDevices(db, [body.recipientUserId]);
-      if (recipientDevices.length > 0) {
-        void fanoutToDevices(centrifugoCfg, recipientDevices, {
-          type: "message",
-          envelopeId: res.rows[0]!.id,
-          conversationId: body.conversationId,
-          senderUserId,
-          senderDeviceId,
-          ciphertext: body.ciphertext,
-          clientMessageId: body.clientMessageId ?? null
+      // Push each device ITS OWN ciphertext. Skip the sender's current device
+      // (it already has the message); other sender devices get it for sync.
+      for (const e of envelopes) {
+        if (e.recipientUserId === senderUserId && e.recipientDeviceId === senderDeviceId) continue;
+        void publishToUserDevice({
+          apiUrl: centrifugoCfg.apiUrl,
+          apiKey: centrifugoCfg.apiKey,
+          userId: e.recipientUserId,
+          deviceId: e.recipientDeviceId,
+          data: {
+            type: "message",
+            envelopeId: messageId,
+            conversationId: body.conversationId,
+            senderUserId,
+            senderDeviceId,
+            ciphertext: e.ciphertext,
+            clientMessageId: clientMsgId
+          }
         }).catch((err) => req.log.warn({ err }, "centrifugo_publish_failed"));
       }
     }
 
 
 
-    return reply.send({ ok: true, envelopeId: res.rows[0]!.id });
+    return reply.send({ ok: true, envelopeId: messageId });
 
   }
 
@@ -453,14 +508,14 @@ app.post("/messages", async (req: any, reply: any) => {
 
   // Idempotency for group retries — same client_message_id was already fanned out.
   if (body.clientMessageId) {
-    const dup = await db.query<{ client_message_id: string }>(
-      `SELECT client_message_id FROM message_envelopes
+    const dup = await db.query<{ message_id: string }>(
+      `SELECT message_id FROM message_envelopes
        WHERE conversation_id = $1 AND sender_user_id = $2 AND client_message_id = $3
        LIMIT 1`,
       [body.conversationId, senderUserId, body.clientMessageId]
     );
     if (dup.rows[0]) {
-      return reply.send({ ok: true, envelopeId: body.clientMessageId, deduped: true });
+      return reply.send({ ok: true, envelopeId: dup.rows[0].message_id, deduped: true });
     }
   }
 
@@ -475,13 +530,18 @@ app.post("/messages", async (req: any, reply: any) => {
   const envelopeId = randomUUID();
   const clientMsgId = body.clientMessageId ?? envelopeId;
 
+  if (!body.ciphertext) {
+    return reply.code(400).send({ ok: false, error: "ciphertext required" });
+  }
+
   // Single multi-row INSERT — one DB round trip for the whole group fan-out
-  // instead of one round trip per device (Culprit #1).
-  const cols = 7;
+  // instead of one round trip per device (Culprit #1). All rows share the same
+  // logical message_id (= envelopeId) so receipts/UI resolve one message.
+  const cols = 8;
   const valuesSql = allDevices
     .map((_, i) => {
       const b = i * cols;
-      return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7})`;
+      return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8})`;
     })
     .join(",");
   const params = allDevices.flatMap((d) => [
@@ -491,14 +551,15 @@ app.post("/messages", async (req: any, reply: any) => {
     d.userId,
     d.deviceId,
     body.ciphertext,
-    clientMsgId
+    clientMsgId,
+    envelopeId
   ]);
 
   await db.query(
     `
     INSERT INTO message_envelopes (
       conversation_id, sender_user_id, sender_device_id,
-      recipient_user_id, recipient_device_id, ciphertext, client_message_id
+      recipient_user_id, recipient_device_id, ciphertext, client_message_id, message_id
     ) VALUES ${valuesSql}
     `,
     params
@@ -655,7 +716,7 @@ app.post("/conversations/:conversationId/delivery", async (req: any, reply: any)
 
   const envelope = await db.query<{ sender_user_id: string }>(
 
-    `SELECT sender_user_id FROM message_envelopes WHERE id = $1 AND conversation_id = $2 LIMIT 1`,
+    `SELECT sender_user_id FROM message_envelopes WHERE message_id = $1 AND conversation_id = $2 LIMIT 1`,
 
     [body.envelopeId, params.conversationId]
 
@@ -745,7 +806,7 @@ app.post("/conversations/:conversationId/receipts", async (req: any, reply: any)
 
   const envelope = await db.query<{ sender_user_id: string }>(
 
-    `SELECT sender_user_id FROM message_envelopes WHERE id = $1 LIMIT 1`,
+    `SELECT sender_user_id FROM message_envelopes WHERE message_id = $1 LIMIT 1`,
 
     [body.envelopeId]
 

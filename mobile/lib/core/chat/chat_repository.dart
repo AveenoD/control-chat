@@ -12,6 +12,7 @@ import '../db/message_store.dart';
 import 'chat_models.dart';
 import 'conversation_id.dart';
 import 'group_repository.dart';
+import 'message_wire.dart';
 import 'outbox_service.dart';
 
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
@@ -113,19 +114,49 @@ class ChatRepository {
       if (!text.startsWith('🔒')) {
         _decryptedTextCache[messageId] = text;
       }
-      out.add(
-        ChatMessage(
-          id: row['id'] as String,
-          conversationId: conversationId,
-          senderUserId: senderId,
-          text: text,
-          createdAt: DateTime.parse(row['created_at'] as String),
-          isMine: senderId == _myUserId,
-          clientMessageId: row['client_message_id'] as String?,
-        ),
+      final createdAt = DateTime.parse(row['created_at'] as String);
+      final msg = _buildFromWire(
+        conversationId: conversationId,
+        id: messageId,
+        senderId: senderId,
+        rawText: text,
+        createdAt: createdAt,
+        clientMessageId: row['client_message_id'] as String?,
       );
+      if (msg != null) out.add(msg);
     }
     return out;
+  }
+
+  /// Decodes the wire payload and turns it into a [ChatMessage], or applies a
+  /// control payload (and returns null so it never renders as a bubble).
+  ChatMessage? _buildFromWire({
+    required String conversationId,
+    required String id,
+    required String senderId,
+    required String rawText,
+    required DateTime createdAt,
+    String? clientMessageId,
+    String? senderLabel,
+  }) {
+    // Sentinels (🔒 …) aren't wire-encoded — pass them straight through.
+    final wire = rawText.startsWith('🔒') ? WireMessage(text: rawText) : ChatWire.decode(rawText);
+    if (wire.isTimerControl) {
+      _store.setDisappearing(conversationId, wire.timerSeconds);
+      return null;
+    }
+    return ChatMessage(
+      id: id,
+      conversationId: conversationId,
+      senderUserId: senderId,
+      text: wire.text,
+      createdAt: createdAt,
+      isMine: senderId == _myUserId,
+      clientMessageId: clientMessageId,
+      senderLabel: senderLabel,
+      viewOnce: wire.viewOnce,
+      expiresAt: wire.ttlSeconds > 0 ? createdAt.add(Duration(seconds: wire.ttlSeconds)) : null,
+    );
   }
 
   Future<List<ChatMessage>> _fetchGroupMessages(String conversationId, List<dynamic> rows) async {
@@ -161,17 +192,15 @@ class ChatRepository {
       } catch (_) {
         text = '🔒 Unable to decrypt';
       }
-      out.add(
-        ChatMessage(
-          id: row['id'] as String,
-          conversationId: conversationId,
-          senderUserId: senderId,
-          text: text,
-          createdAt: DateTime.parse(row['created_at'] as String),
-          isMine: senderId == _myUserId,
-          clientMessageId: row['client_message_id'] as String?,
-        ),
+      final msg = _buildFromWire(
+        conversationId: conversationId,
+        id: row['id'] as String,
+        senderId: senderId,
+        rawText: text,
+        createdAt: DateTime.parse(row['created_at'] as String),
+        clientMessageId: row['client_message_id'] as String?,
       );
+      if (msg != null) out.add(msg);
     }
     return out;
   }
@@ -218,37 +247,47 @@ class ChatRepository {
     required String senderDeviceId,
     required String peerUserId,
   }) async {
-    final keyUserId = senderUserId == _myUserId ? peerUserId : senderUserId;
-    final deviceId = senderUserId == _myUserId ? null : senderDeviceId;
-
-    Future<String?> tryDecrypt(DeviceKeyEntry device) async {
+    // Uniform rule: an envelope addressed to THIS device was encrypted by the
+    // sender's device, so the conversation key derives from the SENDER device's
+    // public key + our private key (ECDH is symmetric). This works for both
+    // peer messages and our own self-copies.
+    Future<String?> tryWithPub(String pub) async {
       try {
         return await ChatCryptoService.decrypt(
           ciphertext: ciphertext,
           conversationId: conversationId,
-          peerPublicKeyBase64: device.publicKey,
+          peerPublicKeyBase64: pub,
         );
       } catch (_) {
         return null;
       }
     }
 
-    final primary = await _deviceKeys.fetchDeviceForUser(keyUserId, deviceId: deviceId);
-    if (primary != null) {
-      final text = await tryDecrypt(primary);
+    // Self-copy sent from this very device → our own (local) key decrypts it.
+    if (senderUserId == _myUserId) {
+      final localPub = await ChatCryptoService.publicKeyBase64();
+      final text = await tryWithPub(localPub);
       if (text != null) return text;
     }
 
-    var all = await _deviceKeys.fetchAllDevices(keyUserId, forceRefresh: false);
-    for (final device in all) {
-      final text = await tryDecrypt(device);
+    // Primary: the exact sender device's registered key.
+    final exact = await _deviceKeys.fetchDeviceForUser(senderUserId, deviceId: senderDeviceId);
+    if (exact != null) {
+      final text = await tryWithPub(exact.publicKey);
       if (text != null) return text;
     }
 
-    _deviceKeys.invalidate(keyUserId);
-    all = await _deviceKeys.fetchAllDevices(keyUserId, forceRefresh: true);
+    // Fallback: any of the sender's devices (covers key rotation / device id drift).
+    var all = await _deviceKeys.fetchAllDevices(senderUserId, forceRefresh: false);
     for (final device in all) {
-      final text = await tryDecrypt(device);
+      final text = await tryWithPub(device.publicKey);
+      if (text != null) return text;
+    }
+
+    _deviceKeys.invalidate(senderUserId);
+    all = await _deviceKeys.fetchAllDevices(senderUserId, forceRefresh: true);
+    for (final device in all) {
+      final text = await tryWithPub(device.publicKey);
       if (text != null) return text;
     }
     return '🔒 Unable to decrypt';
@@ -260,25 +299,61 @@ class ChatRepository {
     required String recipientUserId,
     required String plaintext,
     String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
   }) async {
     final conversationId = directConversationId(_myUserId, recipientUserId);
-    final device = await _deviceKeys.fetchPrimaryDevice(recipientUserId, forceRefresh: true);
-    if (device == null) {
+    final wired = ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
+
+    // Multi-device E2EE: encrypt a separate copy for EVERY destination device —
+    // all of the recipient's devices (so whichever they read on can decrypt)
+    // and all of our own devices (self-read + multi-device sync). This is what
+    // guarantees messages always decrypt even with stale/extra device keys.
+    final recipientDevices = await _deviceKeys.fetchAllDevices(recipientUserId, forceRefresh: true);
+    if (recipientDevices.isEmpty) {
       throw Exception('Recipient has no registered device — ask them to open the app');
     }
+    final myDevices = await _deviceKeys.fetchAllDevices(_myUserId, forceRefresh: true);
+    final myDeviceId = _session().deviceId;
+    final myLocalPub = await ChatCryptoService.publicKeyBase64();
 
-    final ciphertext = await ChatCryptoService.encrypt(
-      plaintext: plaintext,
-      conversationId: conversationId,
-      peerPublicKeyBase64: device.publicKey,
-    );
+    // (userId, deviceId) -> public key. Use our authoritative LOCAL key for our
+    // own current device so we can always re-read our own message even if the
+    // server copy of our key briefly lags.
+    final targets = <String, ({String userId, String deviceId, String pub})>{};
+    void addTarget(String userId, String deviceId, String pub) {
+      targets['$userId::$deviceId'] = (userId: userId, deviceId: deviceId, pub: pub);
+    }
+
+    for (final d in recipientDevices) {
+      addTarget(recipientUserId, d.deviceId, d.publicKey);
+    }
+    for (final d in myDevices) {
+      final pub = (myDeviceId != null && d.deviceId == myDeviceId) ? myLocalPub : d.publicKey;
+      addTarget(_myUserId, d.deviceId, pub);
+    }
+    if (myDeviceId != null) {
+      addTarget(_myUserId, myDeviceId, myLocalPub);
+    }
+
+    final envelopes = <Map<String, dynamic>>[];
+    for (final t in targets.values) {
+      final ciphertext = await ChatCryptoService.encrypt(
+        plaintext: wired,
+        conversationId: conversationId,
+        peerPublicKeyBase64: t.pub,
+      );
+      envelopes.add({
+        'recipientUserId': t.userId,
+        'recipientDeviceId': t.deviceId,
+        'ciphertext': ciphertext,
+      });
+    }
 
     final res = await _dio.post<Map<String, dynamic>>('/messages', data: {
       'conversationId': conversationId,
-      'recipientUserId': recipientUserId,
-      'recipientDeviceId': device.deviceId,
-      'ciphertext': ciphertext,
       'clientMessageId': clientMessageId ?? _uuid.v4(),
+      'envelopes': envelopes,
     });
     return res.data!['envelopeId'] as String;
   }
@@ -287,6 +362,8 @@ class ChatRepository {
     required String groupId,
     required String plaintext,
     String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
   }) async {
     final conversationId = groupConversationId(groupId);
     var groupKey = GroupCryptoService.cachedGroupKey(groupId);
@@ -298,7 +375,7 @@ class ChatRepository {
     final ciphertext = await GroupCryptoService.encryptMessage(
       groupId: groupId,
       groupKey: groupKey,
-      plaintext: plaintext,
+      plaintext: ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds),
     );
 
     final res = await _dio.post<Map<String, dynamic>>('/messages', data: {
@@ -307,6 +384,23 @@ class ChatRepository {
       'clientMessageId': clientMessageId ?? _uuid.v4(),
     });
     return res.data!['envelopeId'] as String;
+  }
+
+  /// Broadcasts a disappearing-timer change to the peer/group as an encrypted
+  /// control message. Recipients decode it, update their local timer, and never
+  /// render a bubble. The control travels as an ordinary E2EE message body.
+  Future<void> sendDisappearingTimer({
+    required bool isGroup,
+    String? recipientUserId,
+    String? groupId,
+    required int seconds,
+  }) async {
+    final wire = ChatWire.encodeTimerControl(seconds);
+    if (isGroup && groupId != null) {
+      await sendGroupMessage(groupId: groupId, plaintext: wire);
+    } else if (recipientUserId != null) {
+      await sendMessage(recipientUserId: recipientUserId, plaintext: wire);
+    }
   }
 
   /// Retry every queued (un-acked) outgoing message. Server idempotency by
@@ -322,11 +416,15 @@ class ChatRepository {
                 groupId: e.groupId!,
                 plaintext: e.plaintext,
                 clientMessageId: e.clientMessageId,
+                viewOnce: e.viewOnce,
+                ttlSeconds: e.ttlSeconds,
               )
             : await sendMessage(
                 recipientUserId: e.recipientUserId!,
                 plaintext: e.plaintext,
                 clientMessageId: e.clientMessageId,
+                viewOnce: e.viewOnce,
+                ttlSeconds: e.ttlSeconds,
               );
         await _outbox.remove(e.clientMessageId);
         await _store.confirmSent(e.clientMessageId, envelopeId);

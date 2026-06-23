@@ -36,6 +36,24 @@ class Messages extends Table {
   BoolColumn get sendFailed => boolean().withDefault(const Constant(false))();
 
   TextColumn get senderLabel => text().nullable()();
+
+  /// One-time view; body is wiped locally once opened by the recipient.
+  BoolColumn get viewOnce => boolean().withDefault(const Constant(false))();
+  BoolColumn get viewed => boolean().withDefault(const Constant(false))();
+
+  /// Disappearing-message expiry (epoch millis); null = never expires.
+  IntColumn get expiresAt => integer().nullable()();
+}
+
+/// Per-conversation feature settings kept separate from the chat list so they
+/// never disturb conversation ordering. Currently holds the disappearing
+/// messages timer (seconds; 0 = off).
+class ConversationSettings extends Table {
+  TextColumn get conversationId => text()();
+  IntColumn get disappearingSeconds => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {conversationId};
 }
 
 /// Cached call log so the Calls tab renders offline / instantly.
@@ -66,14 +84,14 @@ class Conversations extends Table {
   Set<Column> get primaryKey => {conversationId};
 }
 
-@DriftDatabase(tables: [Messages, Conversations, CallHistoryItems])
+@DriftDatabase(tables: [Messages, Conversations, CallHistoryItems, ConversationSettings])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -92,6 +110,12 @@ class AppDatabase extends _$AppDatabase {
         onUpgrade: (m, from, to) async {
           if (from < 2) {
             await m.createTable(callHistoryItems);
+          }
+          if (from < 3) {
+            await m.addColumn(messages, messages.viewOnce);
+            await m.addColumn(messages, messages.viewed);
+            await m.addColumn(messages, messages.expiresAt);
+            await m.createTable(conversationSettings);
           }
         },
       );

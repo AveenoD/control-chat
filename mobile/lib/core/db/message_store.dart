@@ -36,6 +36,11 @@ class MessageStore {
         senderLabel: r.senderLabel,
         clientMessageId: r.clientMessageId,
         sendFailed: r.sendFailed,
+        viewOnce: r.viewOnce,
+        viewed: r.viewed,
+        expiresAt: r.expiresAt == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(r.expiresAt!),
       );
 
   /// Reactive stream of a conversation's messages, oldest → newest.
@@ -69,6 +74,10 @@ class MessageStore {
   Future<void> upsertServerMessage(ChatMessage m) async {
     final existing = await _findByServerOrClient(m.id, m.clientMessageId);
     if (existing == null) {
+      // A disappearing message that already expired before we ever stored it
+      // (e.g. re-syncing an old window) should not flash back into the UI.
+      final exp = m.expiresAt;
+      if (exp != null && exp.isBefore(DateTime.now())) return;
       await _db.into(_db.messages).insert(
             MessagesCompanion.insert(
               serverId: Value(m.id),
@@ -81,11 +90,15 @@ class MessageStore {
               delivered: Value(m.deliveredToPeer),
               readByPeer: Value(m.readByPeer),
               senderLabel: Value(m.senderLabel),
+              viewOnce: Value(m.viewOnce),
+              expiresAt: Value(m.expiresAt?.millisecondsSinceEpoch),
             ),
           );
       return;
     }
-    final keepBody = _isSentinel(m.text) && !_isSentinel(existing.body);
+    // A re-fetch must never resurrect a view-once message the user already
+    // opened — keep it consumed (body stays wiped, viewed stays true).
+    final keepBody = (_isSentinel(m.text) && !_isSentinel(existing.body)) || existing.viewed;
     await (_db.update(_db.messages)..where((t) => t.localId.equals(existing.localId))).write(
       MessagesCompanion(
         serverId: Value(m.id),
@@ -96,6 +109,10 @@ class MessageStore {
         readByPeer: m.readByPeer ? const Value(true) : const Value.absent(),
         sendFailed: const Value(false),
         senderLabel: Value(m.senderLabel ?? existing.senderLabel),
+        viewOnce: Value(m.viewOnce || existing.viewOnce),
+        expiresAt: Value(
+          m.expiresAt?.millisecondsSinceEpoch ?? existing.expiresAt,
+        ),
       ),
     );
   }
@@ -113,6 +130,8 @@ class MessageStore {
     required String senderUserId,
     required String text,
     required DateTime createdAt,
+    bool viewOnce = false,
+    DateTime? expiresAt,
   }) async {
     final existing = await _findByServerOrClient(null, clientMessageId);
     if (existing != null) return;
@@ -124,6 +143,68 @@ class MessageStore {
             body: text,
             createdAt: createdAt.millisecondsSinceEpoch,
             isMine: const Value(true),
+            viewOnce: Value(viewOnce),
+            expiresAt: Value(expiresAt?.millisecondsSinceEpoch),
+          ),
+        );
+  }
+
+  /// Consume a view-once message: mark it opened and wipe the plaintext from
+  /// local storage so it can never be read again (or resurrected by a re-sync).
+  Future<void> markViewed(ChatMessage m) async {
+    final existing = await _findByServerOrClient(
+      m.confirmedOnServer ? m.id : null,
+      m.clientMessageId,
+    );
+    if (existing == null) return;
+    await (_db.update(_db.messages)..where((t) => t.localId.equals(existing.localId))).write(
+      const MessagesCompanion(viewed: Value(true), body: Value('')),
+    );
+  }
+
+  /// Purge permanently-undecryptable junk ("🔒 Unable to decrypt") for a
+  /// conversation. Called on open before a re-sync: any message still addressed
+  /// to this device comes back decrypted, while truly orphaned ciphertext
+  /// (encrypted to a stale/old device key) simply stops cluttering the thread.
+  Future<int> deleteUndecryptable(String conversationId) {
+    return (_db.delete(_db.messages)
+          ..where((t) =>
+              t.conversationId.equals(conversationId) &
+              t.body.equals('🔒 Unable to decrypt')))
+        .go();
+  }
+
+  /// Delete disappearing messages whose timer has elapsed. Driven by the
+  /// thread screen's periodic sweep + lifecycle hooks (not polling the network).
+  Future<int> deleteExpired() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return (_db.delete(_db.messages)
+          ..where((t) => t.expiresAt.isSmallerOrEqualValue(now)))
+        .go();
+  }
+
+  // ---- Per-conversation disappearing-message timer ----
+
+  Stream<int> watchDisappearing(String conversationId) {
+    final q = _db.select(_db.conversationSettings)
+      ..where((t) => t.conversationId.equals(conversationId))
+      ..limit(1);
+    return q.watch().map((rows) => rows.isEmpty ? 0 : rows.first.disappearingSeconds);
+  }
+
+  Future<int> disappearingSeconds(String conversationId) async {
+    final row = await (_db.select(_db.conversationSettings)
+          ..where((t) => t.conversationId.equals(conversationId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.disappearingSeconds ?? 0;
+  }
+
+  Future<void> setDisappearing(String conversationId, int seconds) async {
+    await _db.into(_db.conversationSettings).insertOnConflictUpdate(
+          ConversationSettingsCompanion.insert(
+            conversationId: conversationId,
+            disappearingSeconds: Value(seconds),
           ),
         );
   }
@@ -225,5 +306,6 @@ class MessageStore {
     await _db.delete(_db.messages).go();
     await _db.delete(_db.conversations).go();
     await _db.delete(_db.callHistoryItems).go();
+    await _db.delete(_db.conversationSettings).go();
   }
 }

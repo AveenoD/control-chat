@@ -156,6 +156,45 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _viewOnceMeta = const VerificationMeta(
+    'viewOnce',
+  );
+  @override
+  late final GeneratedColumn<bool> viewOnce = GeneratedColumn<bool>(
+    'view_once',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("view_once" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _viewedMeta = const VerificationMeta('viewed');
+  @override
+  late final GeneratedColumn<bool> viewed = GeneratedColumn<bool>(
+    'viewed',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("viewed" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _expiresAtMeta = const VerificationMeta(
+    'expiresAt',
+  );
+  @override
+  late final GeneratedColumn<int> expiresAt = GeneratedColumn<int>(
+    'expires_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localId,
@@ -170,6 +209,9 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     readByPeer,
     sendFailed,
     senderLabel,
+    viewOnce,
+    viewed,
+    expiresAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -278,6 +320,24 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         ),
       );
     }
+    if (data.containsKey('view_once')) {
+      context.handle(
+        _viewOnceMeta,
+        viewOnce.isAcceptableOrUnknown(data['view_once']!, _viewOnceMeta),
+      );
+    }
+    if (data.containsKey('viewed')) {
+      context.handle(
+        _viewedMeta,
+        viewed.isAcceptableOrUnknown(data['viewed']!, _viewedMeta),
+      );
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(
+        _expiresAtMeta,
+        expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
+      );
+    }
     return context;
   }
 
@@ -335,6 +395,18 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.string,
         data['${effectivePrefix}sender_label'],
       ),
+      viewOnce: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}view_once'],
+      )!,
+      viewed: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}viewed'],
+      )!,
+      expiresAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}expires_at'],
+      ),
     );
   }
 
@@ -365,6 +437,13 @@ class Message extends DataClass implements Insertable<Message> {
   final bool readByPeer;
   final bool sendFailed;
   final String? senderLabel;
+
+  /// One-time view; body is wiped locally once opened by the recipient.
+  final bool viewOnce;
+  final bool viewed;
+
+  /// Disappearing-message expiry (epoch millis); null = never expires.
+  final int? expiresAt;
   const Message({
     required this.localId,
     this.serverId,
@@ -378,6 +457,9 @@ class Message extends DataClass implements Insertable<Message> {
     required this.readByPeer,
     required this.sendFailed,
     this.senderLabel,
+    required this.viewOnce,
+    required this.viewed,
+    this.expiresAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -399,6 +481,11 @@ class Message extends DataClass implements Insertable<Message> {
     map['send_failed'] = Variable<bool>(sendFailed);
     if (!nullToAbsent || senderLabel != null) {
       map['sender_label'] = Variable<String>(senderLabel);
+    }
+    map['view_once'] = Variable<bool>(viewOnce);
+    map['viewed'] = Variable<bool>(viewed);
+    if (!nullToAbsent || expiresAt != null) {
+      map['expires_at'] = Variable<int>(expiresAt);
     }
     return map;
   }
@@ -423,6 +510,11 @@ class Message extends DataClass implements Insertable<Message> {
       senderLabel: senderLabel == null && nullToAbsent
           ? const Value.absent()
           : Value(senderLabel),
+      viewOnce: Value(viewOnce),
+      viewed: Value(viewed),
+      expiresAt: expiresAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(expiresAt),
     );
   }
 
@@ -444,6 +536,9 @@ class Message extends DataClass implements Insertable<Message> {
       readByPeer: serializer.fromJson<bool>(json['readByPeer']),
       sendFailed: serializer.fromJson<bool>(json['sendFailed']),
       senderLabel: serializer.fromJson<String?>(json['senderLabel']),
+      viewOnce: serializer.fromJson<bool>(json['viewOnce']),
+      viewed: serializer.fromJson<bool>(json['viewed']),
+      expiresAt: serializer.fromJson<int?>(json['expiresAt']),
     );
   }
   @override
@@ -462,6 +557,9 @@ class Message extends DataClass implements Insertable<Message> {
       'readByPeer': serializer.toJson<bool>(readByPeer),
       'sendFailed': serializer.toJson<bool>(sendFailed),
       'senderLabel': serializer.toJson<String?>(senderLabel),
+      'viewOnce': serializer.toJson<bool>(viewOnce),
+      'viewed': serializer.toJson<bool>(viewed),
+      'expiresAt': serializer.toJson<int?>(expiresAt),
     };
   }
 
@@ -478,6 +576,9 @@ class Message extends DataClass implements Insertable<Message> {
     bool? readByPeer,
     bool? sendFailed,
     Value<String?> senderLabel = const Value.absent(),
+    bool? viewOnce,
+    bool? viewed,
+    Value<int?> expiresAt = const Value.absent(),
   }) => Message(
     localId: localId ?? this.localId,
     serverId: serverId.present ? serverId.value : this.serverId,
@@ -493,6 +594,9 @@ class Message extends DataClass implements Insertable<Message> {
     readByPeer: readByPeer ?? this.readByPeer,
     sendFailed: sendFailed ?? this.sendFailed,
     senderLabel: senderLabel.present ? senderLabel.value : this.senderLabel,
+    viewOnce: viewOnce ?? this.viewOnce,
+    viewed: viewed ?? this.viewed,
+    expiresAt: expiresAt.present ? expiresAt.value : this.expiresAt,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -520,6 +624,9 @@ class Message extends DataClass implements Insertable<Message> {
       senderLabel: data.senderLabel.present
           ? data.senderLabel.value
           : this.senderLabel,
+      viewOnce: data.viewOnce.present ? data.viewOnce.value : this.viewOnce,
+      viewed: data.viewed.present ? data.viewed.value : this.viewed,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
     );
   }
 
@@ -537,7 +644,10 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('delivered: $delivered, ')
           ..write('readByPeer: $readByPeer, ')
           ..write('sendFailed: $sendFailed, ')
-          ..write('senderLabel: $senderLabel')
+          ..write('senderLabel: $senderLabel, ')
+          ..write('viewOnce: $viewOnce, ')
+          ..write('viewed: $viewed, ')
+          ..write('expiresAt: $expiresAt')
           ..write(')'))
         .toString();
   }
@@ -556,6 +666,9 @@ class Message extends DataClass implements Insertable<Message> {
     readByPeer,
     sendFailed,
     senderLabel,
+    viewOnce,
+    viewed,
+    expiresAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -572,7 +685,10 @@ class Message extends DataClass implements Insertable<Message> {
           other.delivered == this.delivered &&
           other.readByPeer == this.readByPeer &&
           other.sendFailed == this.sendFailed &&
-          other.senderLabel == this.senderLabel);
+          other.senderLabel == this.senderLabel &&
+          other.viewOnce == this.viewOnce &&
+          other.viewed == this.viewed &&
+          other.expiresAt == this.expiresAt);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -588,6 +704,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<bool> readByPeer;
   final Value<bool> sendFailed;
   final Value<String?> senderLabel;
+  final Value<bool> viewOnce;
+  final Value<bool> viewed;
+  final Value<int?> expiresAt;
   const MessagesCompanion({
     this.localId = const Value.absent(),
     this.serverId = const Value.absent(),
@@ -601,6 +720,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.readByPeer = const Value.absent(),
     this.sendFailed = const Value.absent(),
     this.senderLabel = const Value.absent(),
+    this.viewOnce = const Value.absent(),
+    this.viewed = const Value.absent(),
+    this.expiresAt = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.localId = const Value.absent(),
@@ -615,6 +737,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.readByPeer = const Value.absent(),
     this.sendFailed = const Value.absent(),
     this.senderLabel = const Value.absent(),
+    this.viewOnce = const Value.absent(),
+    this.viewed = const Value.absent(),
+    this.expiresAt = const Value.absent(),
   }) : conversationId = Value(conversationId),
        senderUserId = Value(senderUserId),
        body = Value(body),
@@ -632,6 +757,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<bool>? readByPeer,
     Expression<bool>? sendFailed,
     Expression<String>? senderLabel,
+    Expression<bool>? viewOnce,
+    Expression<bool>? viewed,
+    Expression<int>? expiresAt,
   }) {
     return RawValuesInsertable({
       if (localId != null) 'local_id': localId,
@@ -646,6 +774,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (readByPeer != null) 'read_by_peer': readByPeer,
       if (sendFailed != null) 'send_failed': sendFailed,
       if (senderLabel != null) 'sender_label': senderLabel,
+      if (viewOnce != null) 'view_once': viewOnce,
+      if (viewed != null) 'viewed': viewed,
+      if (expiresAt != null) 'expires_at': expiresAt,
     });
   }
 
@@ -662,6 +793,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<bool>? readByPeer,
     Value<bool>? sendFailed,
     Value<String?>? senderLabel,
+    Value<bool>? viewOnce,
+    Value<bool>? viewed,
+    Value<int?>? expiresAt,
   }) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -676,6 +810,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       readByPeer: readByPeer ?? this.readByPeer,
       sendFailed: sendFailed ?? this.sendFailed,
       senderLabel: senderLabel ?? this.senderLabel,
+      viewOnce: viewOnce ?? this.viewOnce,
+      viewed: viewed ?? this.viewed,
+      expiresAt: expiresAt ?? this.expiresAt,
     );
   }
 
@@ -718,6 +855,15 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (senderLabel.present) {
       map['sender_label'] = Variable<String>(senderLabel.value);
     }
+    if (viewOnce.present) {
+      map['view_once'] = Variable<bool>(viewOnce.value);
+    }
+    if (viewed.present) {
+      map['viewed'] = Variable<bool>(viewed.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<int>(expiresAt.value);
+    }
     return map;
   }
 
@@ -735,7 +881,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('delivered: $delivered, ')
           ..write('readByPeer: $readByPeer, ')
           ..write('sendFailed: $sendFailed, ')
-          ..write('senderLabel: $senderLabel')
+          ..write('senderLabel: $senderLabel, ')
+          ..write('viewOnce: $viewOnce, ')
+          ..write('viewed: $viewed, ')
+          ..write('expiresAt: $expiresAt')
           ..write(')'))
         .toString();
   }
@@ -1686,6 +1835,241 @@ class CallHistoryItemsCompanion extends UpdateCompanion<CallHistoryItem> {
   }
 }
 
+class $ConversationSettingsTable extends ConversationSettings
+    with TableInfo<$ConversationSettingsTable, ConversationSetting> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ConversationSettingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _conversationIdMeta = const VerificationMeta(
+    'conversationId',
+  );
+  @override
+  late final GeneratedColumn<String> conversationId = GeneratedColumn<String>(
+    'conversation_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _disappearingSecondsMeta =
+      const VerificationMeta('disappearingSeconds');
+  @override
+  late final GeneratedColumn<int> disappearingSeconds = GeneratedColumn<int>(
+    'disappearing_seconds',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [conversationId, disappearingSeconds];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'conversation_settings';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<ConversationSetting> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('conversation_id')) {
+      context.handle(
+        _conversationIdMeta,
+        conversationId.isAcceptableOrUnknown(
+          data['conversation_id']!,
+          _conversationIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_conversationIdMeta);
+    }
+    if (data.containsKey('disappearing_seconds')) {
+      context.handle(
+        _disappearingSecondsMeta,
+        disappearingSeconds.isAcceptableOrUnknown(
+          data['disappearing_seconds']!,
+          _disappearingSecondsMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {conversationId};
+  @override
+  ConversationSetting map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ConversationSetting(
+      conversationId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}conversation_id'],
+      )!,
+      disappearingSeconds: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}disappearing_seconds'],
+      )!,
+    );
+  }
+
+  @override
+  $ConversationSettingsTable createAlias(String alias) {
+    return $ConversationSettingsTable(attachedDatabase, alias);
+  }
+}
+
+class ConversationSetting extends DataClass
+    implements Insertable<ConversationSetting> {
+  final String conversationId;
+  final int disappearingSeconds;
+  const ConversationSetting({
+    required this.conversationId,
+    required this.disappearingSeconds,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['conversation_id'] = Variable<String>(conversationId);
+    map['disappearing_seconds'] = Variable<int>(disappearingSeconds);
+    return map;
+  }
+
+  ConversationSettingsCompanion toCompanion(bool nullToAbsent) {
+    return ConversationSettingsCompanion(
+      conversationId: Value(conversationId),
+      disappearingSeconds: Value(disappearingSeconds),
+    );
+  }
+
+  factory ConversationSetting.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ConversationSetting(
+      conversationId: serializer.fromJson<String>(json['conversationId']),
+      disappearingSeconds: serializer.fromJson<int>(
+        json['disappearingSeconds'],
+      ),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'conversationId': serializer.toJson<String>(conversationId),
+      'disappearingSeconds': serializer.toJson<int>(disappearingSeconds),
+    };
+  }
+
+  ConversationSetting copyWith({
+    String? conversationId,
+    int? disappearingSeconds,
+  }) => ConversationSetting(
+    conversationId: conversationId ?? this.conversationId,
+    disappearingSeconds: disappearingSeconds ?? this.disappearingSeconds,
+  );
+  ConversationSetting copyWithCompanion(ConversationSettingsCompanion data) {
+    return ConversationSetting(
+      conversationId: data.conversationId.present
+          ? data.conversationId.value
+          : this.conversationId,
+      disappearingSeconds: data.disappearingSeconds.present
+          ? data.disappearingSeconds.value
+          : this.disappearingSeconds,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ConversationSetting(')
+          ..write('conversationId: $conversationId, ')
+          ..write('disappearingSeconds: $disappearingSeconds')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(conversationId, disappearingSeconds);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ConversationSetting &&
+          other.conversationId == this.conversationId &&
+          other.disappearingSeconds == this.disappearingSeconds);
+}
+
+class ConversationSettingsCompanion
+    extends UpdateCompanion<ConversationSetting> {
+  final Value<String> conversationId;
+  final Value<int> disappearingSeconds;
+  final Value<int> rowid;
+  const ConversationSettingsCompanion({
+    this.conversationId = const Value.absent(),
+    this.disappearingSeconds = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ConversationSettingsCompanion.insert({
+    required String conversationId,
+    this.disappearingSeconds = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : conversationId = Value(conversationId);
+  static Insertable<ConversationSetting> custom({
+    Expression<String>? conversationId,
+    Expression<int>? disappearingSeconds,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (conversationId != null) 'conversation_id': conversationId,
+      if (disappearingSeconds != null)
+        'disappearing_seconds': disappearingSeconds,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ConversationSettingsCompanion copyWith({
+    Value<String>? conversationId,
+    Value<int>? disappearingSeconds,
+    Value<int>? rowid,
+  }) {
+    return ConversationSettingsCompanion(
+      conversationId: conversationId ?? this.conversationId,
+      disappearingSeconds: disappearingSeconds ?? this.disappearingSeconds,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (conversationId.present) {
+      map['conversation_id'] = Variable<String>(conversationId.value);
+    }
+    if (disappearingSeconds.present) {
+      map['disappearing_seconds'] = Variable<int>(disappearingSeconds.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ConversationSettingsCompanion(')
+          ..write('conversationId: $conversationId, ')
+          ..write('disappearingSeconds: $disappearingSeconds, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1694,6 +2078,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $CallHistoryItemsTable callHistoryItems = $CallHistoryItemsTable(
     this,
   );
+  late final $ConversationSettingsTable conversationSettings =
+      $ConversationSettingsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1702,6 +2088,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messages,
     conversations,
     callHistoryItems,
+    conversationSettings,
   ];
 }
 
@@ -1719,6 +2106,9 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<bool> readByPeer,
       Value<bool> sendFailed,
       Value<String?> senderLabel,
+      Value<bool> viewOnce,
+      Value<bool> viewed,
+      Value<int?> expiresAt,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -1734,6 +2124,9 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<bool> readByPeer,
       Value<bool> sendFailed,
       Value<String?> senderLabel,
+      Value<bool> viewOnce,
+      Value<bool> viewed,
+      Value<int?> expiresAt,
     });
 
 class $$MessagesTableFilterComposer
@@ -1802,6 +2195,21 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get senderLabel => $composableBuilder(
     column: $table.senderLabel,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get viewOnce => $composableBuilder(
+    column: $table.viewOnce,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get viewed => $composableBuilder(
+    column: $table.viewed,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1874,6 +2282,21 @@ class $$MessagesTableOrderingComposer
     column: $table.senderLabel,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get viewOnce => $composableBuilder(
+    column: $table.viewOnce,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get viewed => $composableBuilder(
+    column: $table.viewed,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -1932,6 +2355,15 @@ class $$MessagesTableAnnotationComposer
     column: $table.senderLabel,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get viewOnce =>
+      $composableBuilder(column: $table.viewOnce, builder: (column) => column);
+
+  GeneratedColumn<bool> get viewed =>
+      $composableBuilder(column: $table.viewed, builder: (column) => column);
+
+  GeneratedColumn<int> get expiresAt =>
+      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
 }
 
 class $$MessagesTableTableManager
@@ -1974,6 +2406,9 @@ class $$MessagesTableTableManager
                 Value<bool> readByPeer = const Value.absent(),
                 Value<bool> sendFailed = const Value.absent(),
                 Value<String?> senderLabel = const Value.absent(),
+                Value<bool> viewOnce = const Value.absent(),
+                Value<bool> viewed = const Value.absent(),
+                Value<int?> expiresAt = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
                 serverId: serverId,
@@ -1987,6 +2422,9 @@ class $$MessagesTableTableManager
                 readByPeer: readByPeer,
                 sendFailed: sendFailed,
                 senderLabel: senderLabel,
+                viewOnce: viewOnce,
+                viewed: viewed,
+                expiresAt: expiresAt,
               ),
           createCompanionCallback:
               ({
@@ -2002,6 +2440,9 @@ class $$MessagesTableTableManager
                 Value<bool> readByPeer = const Value.absent(),
                 Value<bool> sendFailed = const Value.absent(),
                 Value<String?> senderLabel = const Value.absent(),
+                Value<bool> viewOnce = const Value.absent(),
+                Value<bool> viewed = const Value.absent(),
+                Value<int?> expiresAt = const Value.absent(),
               }) => MessagesCompanion.insert(
                 localId: localId,
                 serverId: serverId,
@@ -2015,6 +2456,9 @@ class $$MessagesTableTableManager
                 readByPeer: readByPeer,
                 sendFailed: sendFailed,
                 senderLabel: senderLabel,
+                viewOnce: viewOnce,
+                viewed: viewed,
+                expiresAt: expiresAt,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
@@ -2528,6 +2972,169 @@ typedef $$CallHistoryItemsTableProcessedTableManager =
       CallHistoryItem,
       PrefetchHooks Function()
     >;
+typedef $$ConversationSettingsTableCreateCompanionBuilder =
+    ConversationSettingsCompanion Function({
+      required String conversationId,
+      Value<int> disappearingSeconds,
+      Value<int> rowid,
+    });
+typedef $$ConversationSettingsTableUpdateCompanionBuilder =
+    ConversationSettingsCompanion Function({
+      Value<String> conversationId,
+      Value<int> disappearingSeconds,
+      Value<int> rowid,
+    });
+
+class $$ConversationSettingsTableFilterComposer
+    extends Composer<_$AppDatabase, $ConversationSettingsTable> {
+  $$ConversationSettingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get disappearingSeconds => $composableBuilder(
+    column: $table.disappearingSeconds,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$ConversationSettingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $ConversationSettingsTable> {
+  $$ConversationSettingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get disappearingSeconds => $composableBuilder(
+    column: $table.disappearingSeconds,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$ConversationSettingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ConversationSettingsTable> {
+  $$ConversationSettingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get disappearingSeconds => $composableBuilder(
+    column: $table.disappearingSeconds,
+    builder: (column) => column,
+  );
+}
+
+class $$ConversationSettingsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $ConversationSettingsTable,
+          ConversationSetting,
+          $$ConversationSettingsTableFilterComposer,
+          $$ConversationSettingsTableOrderingComposer,
+          $$ConversationSettingsTableAnnotationComposer,
+          $$ConversationSettingsTableCreateCompanionBuilder,
+          $$ConversationSettingsTableUpdateCompanionBuilder,
+          (
+            ConversationSetting,
+            BaseReferences<
+              _$AppDatabase,
+              $ConversationSettingsTable,
+              ConversationSetting
+            >,
+          ),
+          ConversationSetting,
+          PrefetchHooks Function()
+        > {
+  $$ConversationSettingsTableTableManager(
+    _$AppDatabase db,
+    $ConversationSettingsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ConversationSettingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ConversationSettingsTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$ConversationSettingsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> conversationId = const Value.absent(),
+                Value<int> disappearingSeconds = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ConversationSettingsCompanion(
+                conversationId: conversationId,
+                disappearingSeconds: disappearingSeconds,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String conversationId,
+                Value<int> disappearingSeconds = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ConversationSettingsCompanion.insert(
+                conversationId: conversationId,
+                disappearingSeconds: disappearingSeconds,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$ConversationSettingsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $ConversationSettingsTable,
+      ConversationSetting,
+      $$ConversationSettingsTableFilterComposer,
+      $$ConversationSettingsTableOrderingComposer,
+      $$ConversationSettingsTableAnnotationComposer,
+      $$ConversationSettingsTableCreateCompanionBuilder,
+      $$ConversationSettingsTableUpdateCompanionBuilder,
+      (
+        ConversationSetting,
+        BaseReferences<
+          _$AppDatabase,
+          $ConversationSettingsTable,
+          ConversationSetting
+        >,
+      ),
+      ConversationSetting,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2538,4 +3145,6 @@ class $AppDatabaseManager {
       $$ConversationsTableTableManager(_db, _db.conversations);
   $$CallHistoryItemsTableTableManager get callHistoryItems =>
       $$CallHistoryItemsTableTableManager(_db, _db.callHistoryItems);
+  $$ConversationSettingsTableTableManager get conversationSettings =>
+      $$ConversationSettingsTableTableManager(_db, _db.conversationSettings);
 }

@@ -24,6 +24,8 @@ import '../../core/chat/chat_repository.dart';
 
 import '../../core/chat/conversation_id.dart';
 
+import '../../core/chat/message_wire.dart';
+
 import '../../core/chat/outbox_service.dart';
 
 import '../../core/db/message_store.dart';
@@ -115,6 +117,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
   bool _typingEnabled = true;
 
+  /// Disappearing-message timer for this chat (seconds; 0 = off).
+  int _disappearingSeconds = 0;
+
+  /// When true the next message is sent as one-time-view.
+  bool _viewOnceNext = false;
+
+  StreamSubscription<int>? _disappearingSub;
+  Timer? _expirySweeper;
+
 
 
   @override
@@ -162,13 +173,47 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     // UI is a projection of the local DB → cached messages render instantly
     // (offline-capable). The network sync below just writes into that DB.
     _subscribeToStore();
-    _syncMessages();
+    _watchDisappearing();
+    _startExpirySweeper();
+    _purgeUndecryptableThenSync();
     _flushOutbox();
 
     _startRealtime();
 
     _input.addListener(_onInputChanged);
 
+  }
+
+  /// Clear stale "unable to decrypt" rows, then reconcile. With the multi-device
+  /// fix, any message still addressed to this device returns decrypted; orphaned
+  /// old-model ciphertext just stops showing.
+  Future<void> _purgeUndecryptableThenSync() async {
+    final convId = _conversationId;
+    if (convId != null) {
+      await ref.read(messageStoreProvider).deleteUndecryptable(convId);
+    }
+    await _syncMessages();
+  }
+
+  void _watchDisappearing() {
+    final convId = _conversationId;
+    if (convId == null) return;
+    final store = ref.read(messageStoreProvider);
+    _disappearingSub?.cancel();
+    _disappearingSub = store.watchDisappearing(convId).listen((seconds) {
+      if (mounted) setState(() => _disappearingSeconds = seconds);
+    });
+  }
+
+  /// Periodically purge expired disappearing messages. The watch stream then
+  /// re-emits the trimmed list. Event-driven, not network polling.
+  void _startExpirySweeper() {
+    final store = ref.read(messageStoreProvider);
+    store.deleteExpired();
+    _expirySweeper?.cancel();
+    _expirySweeper = Timer.periodic(const Duration(seconds: 5), (_) {
+      store.deleteExpired();
+    });
   }
 
 
@@ -369,15 +414,25 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     if (!mounted) return;
 
+    // Decode feature metadata carried inside the E2EE plaintext.
+    final wire = text.startsWith('🔒') ? WireMessage(text: text) : ChatWire.decode(text);
+    if (wire.isTimerControl) {
+      await ref.read(messageStoreProvider).setDisappearing(convId, wire.timerSeconds);
+      return;
+    }
+
+    final now = DateTime.now();
     await ref.read(messageStoreProvider).upsertServerMessage(
       ChatMessage(
-        id: envelopeId ?? 'rt-${DateTime.now().millisecondsSinceEpoch}',
+        id: envelopeId ?? 'rt-${now.millisecondsSinceEpoch}',
         conversationId: convId,
         senderUserId: senderId,
-        text: text,
-        createdAt: DateTime.now(),
+        text: wire.text,
+        createdAt: now,
         isMine: false,
         clientMessageId: data['clientMessageId'] as String?,
+        viewOnce: wire.viewOnce,
+        expiresAt: wire.ttlSeconds > 0 ? now.add(Duration(seconds: wire.ttlSeconds)) : null,
       ),
     );
 
@@ -511,6 +566,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       _startRealtime();
       _syncMessages();
       _flushOutbox();
+      ref.read(messageStoreProvider).deleteExpired();
 
     }
 
@@ -529,6 +585,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     _typingKeepAlive?.cancel();
     _realtimeSub?.cancel();
     _messagesSub?.cancel();
+    _disappearingSub?.cancel();
+    _expirySweeper?.cancel();
 
     _input.removeListener(_onInputChanged);
 
@@ -630,7 +688,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     final now = DateTime.now();
     final store = ref.read(messageStoreProvider);
 
+    final viewOnce = _viewOnceNext;
+    final ttl = _disappearingSeconds;
+    final expiresAt = ttl > 0 ? now.add(Duration(seconds: ttl)) : null;
+
     _input.clear();
+    if (_viewOnceNext) setState(() => _viewOnceNext = false);
     if (_typingEnabled) {
       ref.read(chatRepositoryProvider).sendTyping(conversationId: _conversationId!, isTyping: false).catchError((_) {});
     }
@@ -644,6 +707,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       senderUserId: myId,
       text: text,
       createdAt: now,
+      viewOnce: viewOnce,
+      expiresAt: expiresAt,
     );
     await ref.read(chatRepositoryProvider).outbox.add(OutboxEntry(
           clientMessageId: cmid,
@@ -653,20 +718,24 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           createdAt: now,
           recipientUserId: _isGroup ? null : _peerUserId,
           groupId: _isGroup ? _groupId : null,
+          viewOnce: viewOnce,
+          ttlSeconds: ttl,
         ));
 
-    await _trySend(cmid, text);
+    await _trySend(cmid, text, viewOnce: viewOnce, ttlSeconds: ttl);
   }
 
-  Future<void> _trySend(String cmid, String text) async {
+  Future<void> _trySend(String cmid, String text, {bool viewOnce = false, int ttlSeconds = 0}) async {
     final repo = ref.read(chatRepositoryProvider);
     final store = ref.read(messageStoreProvider);
     try {
       String envelopeId;
       if (_isGroup && _groupId != null) {
-        envelopeId = await repo.sendGroupMessage(groupId: _groupId!, plaintext: text, clientMessageId: cmid);
+        envelopeId = await repo.sendGroupMessage(
+            groupId: _groupId!, plaintext: text, clientMessageId: cmid, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
       } else if (_peerUserId != null) {
-        envelopeId = await repo.sendMessage(recipientUserId: _peerUserId!, plaintext: text, clientMessageId: cmid);
+        envelopeId = await repo.sendMessage(
+            recipientUserId: _peerUserId!, plaintext: text, clientMessageId: cmid, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
       } else {
         return;
       }
@@ -683,7 +752,80 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
   Future<void> _retry(ChatMessage m) async {
     if (m.clientMessageId == null) return;
     await ref.read(messageStoreProvider).markFailed(m.clientMessageId!, false);
-    await _trySend(m.clientMessageId!, m.text);
+    final ttl = m.expiresAt != null ? m.expiresAt!.difference(m.createdAt).inSeconds : 0;
+    await _trySend(m.clientMessageId!, m.text, viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0);
+  }
+
+  /// Open a one-time-view message: reveal its text once, then consume it.
+  Future<void> _openViewOnce(ChatMessage m) async {
+    if (m.viewed) return;
+    final body = m.text;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [Icon(Icons.visibility_off_outlined, size: 18), Gap(8), Text('View once')],
+        ),
+        content: Text(body),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+    await ref.read(messageStoreProvider).markViewed(m);
+  }
+
+  Future<void> _pickDisappearingTimer() async {
+    const options = <(String, int)>[
+      ('Off', 0),
+      ('30 seconds', 30),
+      ('1 hour', 3600),
+      ('1 day', 86400),
+      ('7 days', 604800),
+    ];
+    final selected = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Disappearing messages', style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+            for (final o in options)
+              ListTile(
+                title: Text(o.$1),
+                trailing: _disappearingSeconds == o.$2
+                    ? Icon(Icons.check, color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () => Navigator.pop(ctx, o.$2),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || _conversationId == null) return;
+    final store = ref.read(messageStoreProvider);
+    await store.setDisappearing(_conversationId!, selected);
+    try {
+      await ref.read(chatRepositoryProvider).sendDisappearingTimer(
+            isGroup: _isGroup,
+            recipientUserId: _isGroup ? null : _peerUserId,
+            groupId: _isGroup ? _groupId : null,
+            seconds: selected,
+          );
+    } catch (_) {
+      // Local timer still applies; peer will sync the change on next send/open.
+    }
+  }
+
+  String _humanTimer(int seconds) {
+    if (seconds <= 0) return 'off';
+    if (seconds < 60) return '$seconds seconds';
+    if (seconds < 3600) return '${seconds ~/ 60} minutes';
+    if (seconds < 86400) return '${seconds ~/ 3600} hour${seconds ~/ 3600 == 1 ? '' : 's'}';
+    return '${seconds ~/ 86400} day${seconds ~/ 86400 == 1 ? '' : 's'}';
   }
 
   /// Retry all queued sends (called on reconnect + app launch). The repository
@@ -874,6 +1016,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
             IconButton(onPressed: _startVoiceCall, icon: const Icon(Icons.call_outlined)),
 
+          IconButton(
+            tooltip: 'Disappearing messages',
+            onPressed: _pickDisappearingTimer,
+            icon: Icon(
+              _disappearingSeconds > 0 ? Icons.timer : Icons.timer_outlined,
+              color: _disappearingSeconds > 0 ? primary : null,
+            ),
+          ),
+
           PopupMenuButton<String>(
 
             onSelected: (v) {
@@ -999,6 +1150,9 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
                                   primary: primary,
                                   showSender: _isGroup && !m.isMine,
                                   onRetry: m.sendFailed ? () => _retry(m) : null,
+                                  onViewOnce: (m.viewOnce && !m.isMine && !m.viewed)
+                                      ? () => _openViewOnce(m)
+                                      : null,
                                 );
 
                               },
@@ -1022,6 +1176,25 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
           ),
 
+          if (_disappearingSeconds > 0)
+            Container(
+              width: double.infinity,
+              color: primary.withValues(alpha: 0.08),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Row(
+                children: [
+                  Icon(Icons.timer, size: 14, color: primary),
+                  const Gap(6),
+                  Expanded(
+                    child: Text(
+                      'Disappearing messages on · new messages vanish after ${_humanTimer(_disappearingSeconds)}',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(color: primary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
           SafeArea(
 
             child: Padding(
@@ -1031,6 +1204,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
               child: Row(
 
                 children: [
+
+                  IconButton(
+                    tooltip: 'View once',
+                    onPressed: () => setState(() => _viewOnceNext = !_viewOnceNext),
+                    icon: Icon(
+                      _viewOnceNext ? Icons.visibility_off : Icons.visibility_off_outlined,
+                      color: _viewOnceNext ? primary : null,
+                    ),
+                  ),
 
                   Expanded(
 
@@ -1044,7 +1226,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
                       decoration: InputDecoration(
 
-                        hintText: 'Message',
+                        hintText: _viewOnceNext ? 'View-once message' : 'Message',
 
                         filled: true,
 
@@ -1130,7 +1312,7 @@ class _TypingIndicatorState extends State<_TypingIndicator> {
 
 class _Bubble extends StatelessWidget {
 
-  const _Bubble({required this.message, required this.primary, this.showSender = false, this.onRetry});
+  const _Bubble({required this.message, required this.primary, this.showSender = false, this.onRetry, this.onViewOnce});
 
 
 
@@ -1142,6 +1324,9 @@ class _Bubble extends StatelessWidget {
 
   final VoidCallback? onRetry;
 
+  /// Tap handler for an unopened incoming one-time-view message.
+  final VoidCallback? onViewOnce;
+
 
 
   @override
@@ -1150,6 +1335,7 @@ class _Bubble extends StatelessWidget {
 
     final time = DateFormat.jm().format(message.createdAt.toLocal());
     final (receipt, receiptColor) = _receiptStyle(message);
+    final onMine = message.isMine ? Colors.white : const Color(0xFF111827);
 
     final bubble = Container(
 
@@ -1175,19 +1361,7 @@ class _Bubble extends StatelessWidget {
 
           children: [
 
-            Text(
-
-              message.text,
-
-              style: TextStyle(
-
-                color: message.isMine ? Colors.white : const Color(0xFF111827),
-
-                height: 1.35,
-
-              ),
-
-            ),
+            _content(context, onMine),
 
             const Gap(4),
 
@@ -1214,16 +1388,59 @@ class _Bubble extends StatelessWidget {
 
       );
 
+    final tap = (message.sendFailed && onRetry != null) ? onRetry : onViewOnce;
     return Align(
 
       alignment: message.isMine ? Alignment.centerRight : Alignment.centerLeft,
 
-      child: message.sendFailed && onRetry != null
-          ? GestureDetector(onTap: onRetry, child: bubble)
-          : bubble,
+      child: tap != null ? GestureDetector(onTap: tap, child: bubble) : bubble,
 
     );
 
+  }
+
+  /// Renders the bubble body, accounting for one-time-view states.
+  Widget _content(BuildContext context, Color onColor) {
+    if (message.viewOnce && !message.isMine && !message.viewed) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.visibility_off_outlined, size: 16, color: onColor),
+          const Gap(6),
+          Text('View once · tap to view',
+              style: TextStyle(color: onColor, fontStyle: FontStyle.italic)),
+        ],
+      );
+    }
+    if (message.viewOnce && message.viewed) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.visibility_off, size: 16, color: onColor),
+          const Gap(6),
+          Text('Opened', style: TextStyle(color: onColor, fontStyle: FontStyle.italic)),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (message.viewOnce && message.isMine)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.visibility_off_outlined, size: 13, color: onColor),
+                const Gap(4),
+                Text('View once', style: TextStyle(fontSize: 10, color: onColor)),
+              ],
+            ),
+          ),
+        Text(message.text, style: TextStyle(color: onColor, height: 1.35)),
+      ],
+    );
   }
 
   (String, Color?) _receiptStyle(ChatMessage message) {
