@@ -41,6 +41,13 @@ class MessageStore {
         expiresAt: r.expiresAt == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(r.expiresAt!),
+        mediaType: r.mediaType,
+        mediaBlobId: r.mediaBlobId,
+        mediaKey: r.mediaKey,
+        mediaMime: r.mediaMime,
+        mediaWidth: r.mediaWidth,
+        mediaHeight: r.mediaHeight,
+        mediaLocalPath: r.mediaLocalPath,
       );
 
   /// Reactive stream of a conversation's messages, oldest → newest.
@@ -92,6 +99,13 @@ class MessageStore {
               senderLabel: Value(m.senderLabel),
               viewOnce: Value(m.viewOnce),
               expiresAt: Value(m.expiresAt?.millisecondsSinceEpoch),
+              mediaType: Value(m.mediaType),
+              mediaBlobId: Value(m.mediaBlobId),
+              mediaKey: Value(m.mediaKey),
+              mediaMime: Value(m.mediaMime),
+              mediaWidth: Value(m.mediaWidth),
+              mediaHeight: Value(m.mediaHeight),
+              mediaLocalPath: Value(m.mediaLocalPath),
             ),
           );
       return;
@@ -113,6 +127,15 @@ class MessageStore {
         expiresAt: Value(
           m.expiresAt?.millisecondsSinceEpoch ?? existing.expiresAt,
         ),
+        // Carry media metadata from the server copy, but never lose an already
+        // downloaded local file (re-download is wasteful and may be offline).
+        mediaType: Value(m.mediaType ?? existing.mediaType),
+        mediaBlobId: Value(m.mediaBlobId ?? existing.mediaBlobId),
+        mediaKey: Value(m.mediaKey ?? existing.mediaKey),
+        mediaMime: Value(m.mediaMime ?? existing.mediaMime),
+        mediaWidth: Value(m.mediaWidth ?? existing.mediaWidth),
+        mediaHeight: Value(m.mediaHeight ?? existing.mediaHeight),
+        mediaLocalPath: Value(existing.mediaLocalPath ?? m.mediaLocalPath),
       ),
     );
   }
@@ -132,6 +155,11 @@ class MessageStore {
     required DateTime createdAt,
     bool viewOnce = false,
     DateTime? expiresAt,
+    String? mediaType,
+    String? mediaMime,
+    int? mediaWidth,
+    int? mediaHeight,
+    String? mediaLocalPath,
   }) async {
     final existing = await _findByServerOrClient(null, clientMessageId);
     if (existing != null) return;
@@ -145,8 +173,26 @@ class MessageStore {
             isMine: const Value(true),
             viewOnce: Value(viewOnce),
             expiresAt: Value(expiresAt?.millisecondsSinceEpoch),
+            mediaType: Value(mediaType),
+            mediaMime: Value(mediaMime),
+            mediaWidth: Value(mediaWidth),
+            mediaHeight: Value(mediaHeight),
+            mediaLocalPath: Value(mediaLocalPath),
           ),
         );
+  }
+
+  /// Record the uploaded blob id + key on an optimistic media message once the
+  /// upload completes (so it can be re-downloaded later if the cache is gone).
+  Future<void> setMediaBlob(String clientMessageId, String blobId, String key) async {
+    await (_db.update(_db.messages)..where((t) => t.clientMessageId.equals(clientMessageId)))
+        .write(MessagesCompanion(mediaBlobId: Value(blobId), mediaKey: Value(key)));
+  }
+
+  /// Cache the decrypted local file path for a media message (by server id).
+  Future<void> setMediaLocalPath(String serverId, String path) async {
+    await (_db.update(_db.messages)..where((t) => t.serverId.equals(serverId)))
+        .write(MessagesCompanion(mediaLocalPath: Value(path)));
   }
 
   /// Consume a view-once message: mark it opened and wipe the plaintext from
@@ -157,8 +203,16 @@ class MessageStore {
       m.clientMessageId,
     );
     if (existing == null) return;
+    // Wipe the body AND the media so a one-time view can never be reopened or
+    // re-downloaded from storage.
     await (_db.update(_db.messages)..where((t) => t.localId.equals(existing.localId))).write(
-      const MessagesCompanion(viewed: Value(true), body: Value('')),
+      const MessagesCompanion(
+        viewed: Value(true),
+        body: Value(''),
+        mediaBlobId: Value(null),
+        mediaKey: Value(null),
+        mediaLocalPath: Value(null),
+      ),
     );
   }
 

@@ -61,6 +61,13 @@ class ChatMessage {
     this.viewOnce = false,
     this.viewed = false,
     this.expiresAt,
+    this.mediaType,
+    this.mediaBlobId,
+    this.mediaKey,
+    this.mediaMime,
+    this.mediaWidth,
+    this.mediaHeight,
+    this.mediaLocalPath,
   });
 
   final String id;
@@ -85,6 +92,25 @@ class ChatMessage {
   /// Disappearing-message expiry; the message is auto-deleted after this.
   final DateTime? expiresAt;
 
+  /// Attachment kind, e.g. 'image'. Null for plain text.
+  final String? mediaType;
+
+  /// Object-storage id of the encrypted blob.
+  final String? mediaBlobId;
+
+  /// Base64 AES key for the blob (stored only in the encrypted-at-rest DB).
+  final String? mediaKey;
+
+  final String? mediaMime;
+  final int? mediaWidth;
+  final int? mediaHeight;
+
+  /// Decrypted local file path once downloaded/cached for display.
+  final String? mediaLocalPath;
+
+  bool get isMedia => mediaType != null && mediaBlobId != null;
+  bool get isImage => mediaType == 'image';
+
   bool get confirmedOnServer => !id.startsWith('local-');
 
   ChatMessage copyWith({
@@ -102,6 +128,13 @@ class ChatMessage {
     bool? viewOnce,
     bool? viewed,
     DateTime? expiresAt,
+    String? mediaType,
+    String? mediaBlobId,
+    String? mediaKey,
+    String? mediaMime,
+    int? mediaWidth,
+    int? mediaHeight,
+    String? mediaLocalPath,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -118,7 +151,14 @@ class ChatMessage {
       viewOnce: viewOnce ?? this.viewOnce,
       viewed: viewed ?? this.viewed,
       expiresAt: expiresAt ?? this.expiresAt,
+      mediaType: mediaType ?? this.mediaType,
+      mediaBlobId: mediaBlobId ?? this.mediaBlobId,
+      mediaKey: mediaKey ?? this.mediaKey,
+      mediaMime: mediaMime ?? this.mediaMime,
+      mediaWidth: mediaWidth ?? this.mediaWidth,
+      mediaHeight: mediaHeight ?? this.mediaHeight,
+      mediaLocalPath: mediaLocalPath ?? this.mediaLocalPath,
     );
   }
 }
-
+

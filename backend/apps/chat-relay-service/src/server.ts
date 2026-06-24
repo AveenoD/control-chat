@@ -45,6 +45,8 @@ import {
 
 import { fanoutToDevices, publishToUserDevice } from "./publish-realtime.js";
 
+import { createMediaStore } from "./media-store.js";
+
 
 
 const cfg = loadChatRelayConfig();
@@ -53,9 +55,20 @@ const logger = createLogger(cfg);
 
 const db = createDb(cfg.DATABASE_URL);
 
+const media = createMediaStore(cfg);
+
 
 
 const app = Fastify({ loggerInstance: logger });
+
+// Raw binary parser for encrypted media uploads (POST /media). The blob is
+// already ciphertext; we just buffer it (bounded by MEDIA_MAX_BYTES) and push
+// it to object storage.
+app.addContentTypeParser(
+  "application/octet-stream",
+  { parseAs: "buffer", bodyLimit: cfg.MEDIA_MAX_BYTES },
+  (_req, body, done) => done(null, body)
+);
 
 
 
@@ -846,6 +859,90 @@ app.post("/conversations/:conversationId/receipts", async (req: any, reply: any)
 
   return reply.send({ ok: true });
 
+});
+
+
+
+// ── Media (E2EE blobs) ───────────────────────────────────────────────
+// Access control mirrors the message endpoints: a user may upload/download a
+// blob only for a conversation they participate in. Bytes are opaque ciphertext.
+async function canAccessConv(userId: string, conversationId: string): Promise<boolean> {
+  const parsed = parseConversationId(conversationId);
+  if (!parsed) return false;
+  if (parsed.kind === "dm") {
+    const peerId = peerUserIdFromConversation(conversationId, userId);
+    if (!peerId) return false;
+    return canAccessConversation(db, userId, peerId);
+  }
+  return canAccessGroup(db, parsed.groupId!, userId);
+}
+
+app.post("/media", async (req: any, reply: any) => {
+  const userId = req.user.sub as string;
+  const query = z
+    .object({
+      conversationId: z.string().min(8).max(128),
+      // plaintext mime hint for the client UI; the stored blob stays opaque
+      contentType: z.string().min(1).max(128).default("application/octet-stream")
+    })
+    .parse(req.query);
+
+  if (!(await canAccessConv(userId, query.conversationId))) {
+    return reply.code(403).send({ ok: false, error: "No access to conversation" });
+  }
+
+  const body = req.body as Buffer;
+  if (!Buffer.isBuffer(body) || body.length === 0) {
+    return reply.code(400).send({ ok: false, error: "Empty body" });
+  }
+  if (body.length > cfg.MEDIA_MAX_BYTES) {
+    return reply.code(413).send({ ok: false, error: "Media too large" });
+  }
+
+  const blobId = randomUUID();
+  try {
+    await media.put(blobId, body, "application/octet-stream");
+  } catch (err) {
+    req.log.error({ err }, "media upload failed");
+    return reply.code(502).send({ ok: false, error: "Storage upload failed" });
+  }
+
+  await db.query(
+    `INSERT INTO media_blobs (id, conversation_id, owner_user_id, size_bytes, content_type)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [blobId, query.conversationId, userId, body.length, query.contentType]
+  );
+
+  return reply.send({ ok: true, blobId, size: body.length });
+});
+
+app.get("/media/:blobId", async (req: any, reply: any) => {
+  const userId = req.user.sub as string;
+  const { blobId } = z.object({ blobId: z.string().uuid() }).parse(req.params);
+
+  const row = await db.query<{ conversation_id: string; size_bytes: string }>(
+    `SELECT conversation_id, size_bytes FROM media_blobs WHERE id = $1`,
+    [blobId]
+  );
+  const blob = row.rows[0];
+  if (!blob) return reply.code(404).send({ ok: false, error: "Not found" });
+
+  if (!(await canAccessConv(userId, blob.conversation_id))) {
+    return reply.code(403).send({ ok: false, error: "No access to media" });
+  }
+
+  let stream;
+  try {
+    stream = await media.get(blobId);
+  } catch (err) {
+    req.log.error({ err }, "media download failed");
+    return reply.code(502).send({ ok: false, error: "Storage download failed" });
+  }
+
+  reply.header("Content-Type", "application/octet-stream");
+  reply.header("Cache-Control", "private, max-age=31536000, immutable");
+  if (blob.size_bytes) reply.header("Content-Length", String(blob.size_bytes));
+  return reply.send(stream);
 });
 
 

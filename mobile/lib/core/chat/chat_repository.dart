@@ -156,6 +156,12 @@ class ChatRepository {
       senderLabel: senderLabel,
       viewOnce: wire.viewOnce,
       expiresAt: wire.ttlSeconds > 0 ? createdAt.add(Duration(seconds: wire.ttlSeconds)) : null,
+      mediaType: wire.mediaType,
+      mediaBlobId: wire.mediaBlobId,
+      mediaKey: wire.mediaKey,
+      mediaMime: wire.mediaMime,
+      mediaWidth: wire.mediaWidth,
+      mediaHeight: wire.mediaHeight,
     );
   }
 
@@ -301,9 +307,55 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
+    return _sendDmWire(
+      recipientUserId: recipientUserId,
+      wired: wired,
+      clientMessageId: clientMessageId,
+    );
+  }
+
+  /// Sends an image as a DM. The blob is already encrypted + uploaded; its key
+  /// travels here E2EE inside the wire payload.
+  Future<String> sendDmImage({
+    required String recipientUserId,
+    required String blobId,
+    required String blobKey,
+    required String mime,
+    int? width,
+    int? height,
+    int? size,
+    String caption = '',
+    String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeMedia(
+      mediaType: 'image',
+      blobId: blobId,
+      blobKey: blobKey,
+      mime: mime,
+      width: width,
+      height: height,
+      size: size,
+      caption: caption,
+      viewOnce: viewOnce,
+      ttlSeconds: ttlSeconds,
+    );
+    return _sendDmWire(
+      recipientUserId: recipientUserId,
+      wired: wired,
+      clientMessageId: clientMessageId,
+    );
+  }
+
+  Future<String> _sendDmWire({
+    required String recipientUserId,
+    required String wired,
+    String? clientMessageId,
   }) async {
     final conversationId = directConversationId(_myUserId, recipientUserId);
-    final wired = ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
 
     // Multi-device E2EE: encrypt a separate copy for EVERY destination device —
     // all of the recipient's devices (so whichever they read on can decrypt)
@@ -364,6 +416,43 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
+    return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
+  }
+
+  Future<String> sendGroupImage({
+    required String groupId,
+    required String blobId,
+    required String blobKey,
+    required String mime,
+    int? width,
+    int? height,
+    int? size,
+    String caption = '',
+    String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeMedia(
+      mediaType: 'image',
+      blobId: blobId,
+      blobKey: blobKey,
+      mime: mime,
+      width: width,
+      height: height,
+      size: size,
+      caption: caption,
+      viewOnce: viewOnce,
+      ttlSeconds: ttlSeconds,
+    );
+    return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
+  }
+
+  Future<String> _sendGroupWire({
+    required String groupId,
+    required String wired,
+    String? clientMessageId,
   }) async {
     final conversationId = groupConversationId(groupId);
     var groupKey = GroupCryptoService.cachedGroupKey(groupId);
@@ -375,7 +464,7 @@ class ChatRepository {
     final ciphertext = await GroupCryptoService.encryptMessage(
       groupId: groupId,
       groupKey: groupKey,
-      plaintext: ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds),
+      plaintext: wired,
     );
 
     final res = await _dio.post<Map<String, dynamic>>('/messages', data: {

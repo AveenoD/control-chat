@@ -195,6 +195,83 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _mediaTypeMeta = const VerificationMeta(
+    'mediaType',
+  );
+  @override
+  late final GeneratedColumn<String> mediaType = GeneratedColumn<String>(
+    'media_type',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaBlobIdMeta = const VerificationMeta(
+    'mediaBlobId',
+  );
+  @override
+  late final GeneratedColumn<String> mediaBlobId = GeneratedColumn<String>(
+    'media_blob_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaKeyMeta = const VerificationMeta(
+    'mediaKey',
+  );
+  @override
+  late final GeneratedColumn<String> mediaKey = GeneratedColumn<String>(
+    'media_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaMimeMeta = const VerificationMeta(
+    'mediaMime',
+  );
+  @override
+  late final GeneratedColumn<String> mediaMime = GeneratedColumn<String>(
+    'media_mime',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaWidthMeta = const VerificationMeta(
+    'mediaWidth',
+  );
+  @override
+  late final GeneratedColumn<int> mediaWidth = GeneratedColumn<int>(
+    'media_width',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaHeightMeta = const VerificationMeta(
+    'mediaHeight',
+  );
+  @override
+  late final GeneratedColumn<int> mediaHeight = GeneratedColumn<int>(
+    'media_height',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaLocalPathMeta = const VerificationMeta(
+    'mediaLocalPath',
+  );
+  @override
+  late final GeneratedColumn<String> mediaLocalPath = GeneratedColumn<String>(
+    'media_local_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localId,
@@ -212,6 +289,13 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     viewOnce,
     viewed,
     expiresAt,
+    mediaType,
+    mediaBlobId,
+    mediaKey,
+    mediaMime,
+    mediaWidth,
+    mediaHeight,
+    mediaLocalPath,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -338,6 +422,57 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
       );
     }
+    if (data.containsKey('media_type')) {
+      context.handle(
+        _mediaTypeMeta,
+        mediaType.isAcceptableOrUnknown(data['media_type']!, _mediaTypeMeta),
+      );
+    }
+    if (data.containsKey('media_blob_id')) {
+      context.handle(
+        _mediaBlobIdMeta,
+        mediaBlobId.isAcceptableOrUnknown(
+          data['media_blob_id']!,
+          _mediaBlobIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('media_key')) {
+      context.handle(
+        _mediaKeyMeta,
+        mediaKey.isAcceptableOrUnknown(data['media_key']!, _mediaKeyMeta),
+      );
+    }
+    if (data.containsKey('media_mime')) {
+      context.handle(
+        _mediaMimeMeta,
+        mediaMime.isAcceptableOrUnknown(data['media_mime']!, _mediaMimeMeta),
+      );
+    }
+    if (data.containsKey('media_width')) {
+      context.handle(
+        _mediaWidthMeta,
+        mediaWidth.isAcceptableOrUnknown(data['media_width']!, _mediaWidthMeta),
+      );
+    }
+    if (data.containsKey('media_height')) {
+      context.handle(
+        _mediaHeightMeta,
+        mediaHeight.isAcceptableOrUnknown(
+          data['media_height']!,
+          _mediaHeightMeta,
+        ),
+      );
+    }
+    if (data.containsKey('media_local_path')) {
+      context.handle(
+        _mediaLocalPathMeta,
+        mediaLocalPath.isAcceptableOrUnknown(
+          data['media_local_path']!,
+          _mediaLocalPathMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -407,6 +542,34 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.int,
         data['${effectivePrefix}expires_at'],
       ),
+      mediaType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_type'],
+      ),
+      mediaBlobId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_blob_id'],
+      ),
+      mediaKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_key'],
+      ),
+      mediaMime: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_mime'],
+      ),
+      mediaWidth: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}media_width'],
+      ),
+      mediaHeight: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}media_height'],
+      ),
+      mediaLocalPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_local_path'],
+      ),
     );
   }
 
@@ -444,6 +607,19 @@ class Message extends DataClass implements Insertable<Message> {
 
   /// Disappearing-message expiry (epoch millis); null = never expires.
   final int? expiresAt;
+
+  /// Media attachment metadata (null for plain text). The blob itself lives in
+  /// object storage as ciphertext; [mediaKey] decrypts it and is safe here
+  /// because the whole DB is encrypted-at-rest.
+  final String? mediaType;
+  final String? mediaBlobId;
+  final String? mediaKey;
+  final String? mediaMime;
+  final int? mediaWidth;
+  final int? mediaHeight;
+
+  /// Decrypted, cached local file path for display (null until downloaded).
+  final String? mediaLocalPath;
   const Message({
     required this.localId,
     this.serverId,
@@ -460,6 +636,13 @@ class Message extends DataClass implements Insertable<Message> {
     required this.viewOnce,
     required this.viewed,
     this.expiresAt,
+    this.mediaType,
+    this.mediaBlobId,
+    this.mediaKey,
+    this.mediaMime,
+    this.mediaWidth,
+    this.mediaHeight,
+    this.mediaLocalPath,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -486,6 +669,27 @@ class Message extends DataClass implements Insertable<Message> {
     map['viewed'] = Variable<bool>(viewed);
     if (!nullToAbsent || expiresAt != null) {
       map['expires_at'] = Variable<int>(expiresAt);
+    }
+    if (!nullToAbsent || mediaType != null) {
+      map['media_type'] = Variable<String>(mediaType);
+    }
+    if (!nullToAbsent || mediaBlobId != null) {
+      map['media_blob_id'] = Variable<String>(mediaBlobId);
+    }
+    if (!nullToAbsent || mediaKey != null) {
+      map['media_key'] = Variable<String>(mediaKey);
+    }
+    if (!nullToAbsent || mediaMime != null) {
+      map['media_mime'] = Variable<String>(mediaMime);
+    }
+    if (!nullToAbsent || mediaWidth != null) {
+      map['media_width'] = Variable<int>(mediaWidth);
+    }
+    if (!nullToAbsent || mediaHeight != null) {
+      map['media_height'] = Variable<int>(mediaHeight);
+    }
+    if (!nullToAbsent || mediaLocalPath != null) {
+      map['media_local_path'] = Variable<String>(mediaLocalPath);
     }
     return map;
   }
@@ -515,6 +719,27 @@ class Message extends DataClass implements Insertable<Message> {
       expiresAt: expiresAt == null && nullToAbsent
           ? const Value.absent()
           : Value(expiresAt),
+      mediaType: mediaType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaType),
+      mediaBlobId: mediaBlobId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaBlobId),
+      mediaKey: mediaKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaKey),
+      mediaMime: mediaMime == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaMime),
+      mediaWidth: mediaWidth == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaWidth),
+      mediaHeight: mediaHeight == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaHeight),
+      mediaLocalPath: mediaLocalPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaLocalPath),
     );
   }
 
@@ -539,6 +764,13 @@ class Message extends DataClass implements Insertable<Message> {
       viewOnce: serializer.fromJson<bool>(json['viewOnce']),
       viewed: serializer.fromJson<bool>(json['viewed']),
       expiresAt: serializer.fromJson<int?>(json['expiresAt']),
+      mediaType: serializer.fromJson<String?>(json['mediaType']),
+      mediaBlobId: serializer.fromJson<String?>(json['mediaBlobId']),
+      mediaKey: serializer.fromJson<String?>(json['mediaKey']),
+      mediaMime: serializer.fromJson<String?>(json['mediaMime']),
+      mediaWidth: serializer.fromJson<int?>(json['mediaWidth']),
+      mediaHeight: serializer.fromJson<int?>(json['mediaHeight']),
+      mediaLocalPath: serializer.fromJson<String?>(json['mediaLocalPath']),
     );
   }
   @override
@@ -560,6 +792,13 @@ class Message extends DataClass implements Insertable<Message> {
       'viewOnce': serializer.toJson<bool>(viewOnce),
       'viewed': serializer.toJson<bool>(viewed),
       'expiresAt': serializer.toJson<int?>(expiresAt),
+      'mediaType': serializer.toJson<String?>(mediaType),
+      'mediaBlobId': serializer.toJson<String?>(mediaBlobId),
+      'mediaKey': serializer.toJson<String?>(mediaKey),
+      'mediaMime': serializer.toJson<String?>(mediaMime),
+      'mediaWidth': serializer.toJson<int?>(mediaWidth),
+      'mediaHeight': serializer.toJson<int?>(mediaHeight),
+      'mediaLocalPath': serializer.toJson<String?>(mediaLocalPath),
     };
   }
 
@@ -579,6 +818,13 @@ class Message extends DataClass implements Insertable<Message> {
     bool? viewOnce,
     bool? viewed,
     Value<int?> expiresAt = const Value.absent(),
+    Value<String?> mediaType = const Value.absent(),
+    Value<String?> mediaBlobId = const Value.absent(),
+    Value<String?> mediaKey = const Value.absent(),
+    Value<String?> mediaMime = const Value.absent(),
+    Value<int?> mediaWidth = const Value.absent(),
+    Value<int?> mediaHeight = const Value.absent(),
+    Value<String?> mediaLocalPath = const Value.absent(),
   }) => Message(
     localId: localId ?? this.localId,
     serverId: serverId.present ? serverId.value : this.serverId,
@@ -597,6 +843,15 @@ class Message extends DataClass implements Insertable<Message> {
     viewOnce: viewOnce ?? this.viewOnce,
     viewed: viewed ?? this.viewed,
     expiresAt: expiresAt.present ? expiresAt.value : this.expiresAt,
+    mediaType: mediaType.present ? mediaType.value : this.mediaType,
+    mediaBlobId: mediaBlobId.present ? mediaBlobId.value : this.mediaBlobId,
+    mediaKey: mediaKey.present ? mediaKey.value : this.mediaKey,
+    mediaMime: mediaMime.present ? mediaMime.value : this.mediaMime,
+    mediaWidth: mediaWidth.present ? mediaWidth.value : this.mediaWidth,
+    mediaHeight: mediaHeight.present ? mediaHeight.value : this.mediaHeight,
+    mediaLocalPath: mediaLocalPath.present
+        ? mediaLocalPath.value
+        : this.mediaLocalPath,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -627,6 +882,21 @@ class Message extends DataClass implements Insertable<Message> {
       viewOnce: data.viewOnce.present ? data.viewOnce.value : this.viewOnce,
       viewed: data.viewed.present ? data.viewed.value : this.viewed,
       expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+      mediaType: data.mediaType.present ? data.mediaType.value : this.mediaType,
+      mediaBlobId: data.mediaBlobId.present
+          ? data.mediaBlobId.value
+          : this.mediaBlobId,
+      mediaKey: data.mediaKey.present ? data.mediaKey.value : this.mediaKey,
+      mediaMime: data.mediaMime.present ? data.mediaMime.value : this.mediaMime,
+      mediaWidth: data.mediaWidth.present
+          ? data.mediaWidth.value
+          : this.mediaWidth,
+      mediaHeight: data.mediaHeight.present
+          ? data.mediaHeight.value
+          : this.mediaHeight,
+      mediaLocalPath: data.mediaLocalPath.present
+          ? data.mediaLocalPath.value
+          : this.mediaLocalPath,
     );
   }
 
@@ -647,13 +917,20 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('senderLabel: $senderLabel, ')
           ..write('viewOnce: $viewOnce, ')
           ..write('viewed: $viewed, ')
-          ..write('expiresAt: $expiresAt')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('mediaType: $mediaType, ')
+          ..write('mediaBlobId: $mediaBlobId, ')
+          ..write('mediaKey: $mediaKey, ')
+          ..write('mediaMime: $mediaMime, ')
+          ..write('mediaWidth: $mediaWidth, ')
+          ..write('mediaHeight: $mediaHeight, ')
+          ..write('mediaLocalPath: $mediaLocalPath')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     localId,
     serverId,
     clientMessageId,
@@ -669,7 +946,14 @@ class Message extends DataClass implements Insertable<Message> {
     viewOnce,
     viewed,
     expiresAt,
-  );
+    mediaType,
+    mediaBlobId,
+    mediaKey,
+    mediaMime,
+    mediaWidth,
+    mediaHeight,
+    mediaLocalPath,
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -688,7 +972,14 @@ class Message extends DataClass implements Insertable<Message> {
           other.senderLabel == this.senderLabel &&
           other.viewOnce == this.viewOnce &&
           other.viewed == this.viewed &&
-          other.expiresAt == this.expiresAt);
+          other.expiresAt == this.expiresAt &&
+          other.mediaType == this.mediaType &&
+          other.mediaBlobId == this.mediaBlobId &&
+          other.mediaKey == this.mediaKey &&
+          other.mediaMime == this.mediaMime &&
+          other.mediaWidth == this.mediaWidth &&
+          other.mediaHeight == this.mediaHeight &&
+          other.mediaLocalPath == this.mediaLocalPath);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -707,6 +998,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<bool> viewOnce;
   final Value<bool> viewed;
   final Value<int?> expiresAt;
+  final Value<String?> mediaType;
+  final Value<String?> mediaBlobId;
+  final Value<String?> mediaKey;
+  final Value<String?> mediaMime;
+  final Value<int?> mediaWidth;
+  final Value<int?> mediaHeight;
+  final Value<String?> mediaLocalPath;
   const MessagesCompanion({
     this.localId = const Value.absent(),
     this.serverId = const Value.absent(),
@@ -723,6 +1021,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.viewOnce = const Value.absent(),
     this.viewed = const Value.absent(),
     this.expiresAt = const Value.absent(),
+    this.mediaType = const Value.absent(),
+    this.mediaBlobId = const Value.absent(),
+    this.mediaKey = const Value.absent(),
+    this.mediaMime = const Value.absent(),
+    this.mediaWidth = const Value.absent(),
+    this.mediaHeight = const Value.absent(),
+    this.mediaLocalPath = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.localId = const Value.absent(),
@@ -740,6 +1045,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.viewOnce = const Value.absent(),
     this.viewed = const Value.absent(),
     this.expiresAt = const Value.absent(),
+    this.mediaType = const Value.absent(),
+    this.mediaBlobId = const Value.absent(),
+    this.mediaKey = const Value.absent(),
+    this.mediaMime = const Value.absent(),
+    this.mediaWidth = const Value.absent(),
+    this.mediaHeight = const Value.absent(),
+    this.mediaLocalPath = const Value.absent(),
   }) : conversationId = Value(conversationId),
        senderUserId = Value(senderUserId),
        body = Value(body),
@@ -760,6 +1072,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<bool>? viewOnce,
     Expression<bool>? viewed,
     Expression<int>? expiresAt,
+    Expression<String>? mediaType,
+    Expression<String>? mediaBlobId,
+    Expression<String>? mediaKey,
+    Expression<String>? mediaMime,
+    Expression<int>? mediaWidth,
+    Expression<int>? mediaHeight,
+    Expression<String>? mediaLocalPath,
   }) {
     return RawValuesInsertable({
       if (localId != null) 'local_id': localId,
@@ -777,6 +1096,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (viewOnce != null) 'view_once': viewOnce,
       if (viewed != null) 'viewed': viewed,
       if (expiresAt != null) 'expires_at': expiresAt,
+      if (mediaType != null) 'media_type': mediaType,
+      if (mediaBlobId != null) 'media_blob_id': mediaBlobId,
+      if (mediaKey != null) 'media_key': mediaKey,
+      if (mediaMime != null) 'media_mime': mediaMime,
+      if (mediaWidth != null) 'media_width': mediaWidth,
+      if (mediaHeight != null) 'media_height': mediaHeight,
+      if (mediaLocalPath != null) 'media_local_path': mediaLocalPath,
     });
   }
 
@@ -796,6 +1122,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<bool>? viewOnce,
     Value<bool>? viewed,
     Value<int?>? expiresAt,
+    Value<String?>? mediaType,
+    Value<String?>? mediaBlobId,
+    Value<String?>? mediaKey,
+    Value<String?>? mediaMime,
+    Value<int?>? mediaWidth,
+    Value<int?>? mediaHeight,
+    Value<String?>? mediaLocalPath,
   }) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -813,6 +1146,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       viewOnce: viewOnce ?? this.viewOnce,
       viewed: viewed ?? this.viewed,
       expiresAt: expiresAt ?? this.expiresAt,
+      mediaType: mediaType ?? this.mediaType,
+      mediaBlobId: mediaBlobId ?? this.mediaBlobId,
+      mediaKey: mediaKey ?? this.mediaKey,
+      mediaMime: mediaMime ?? this.mediaMime,
+      mediaWidth: mediaWidth ?? this.mediaWidth,
+      mediaHeight: mediaHeight ?? this.mediaHeight,
+      mediaLocalPath: mediaLocalPath ?? this.mediaLocalPath,
     );
   }
 
@@ -864,6 +1204,27 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (expiresAt.present) {
       map['expires_at'] = Variable<int>(expiresAt.value);
     }
+    if (mediaType.present) {
+      map['media_type'] = Variable<String>(mediaType.value);
+    }
+    if (mediaBlobId.present) {
+      map['media_blob_id'] = Variable<String>(mediaBlobId.value);
+    }
+    if (mediaKey.present) {
+      map['media_key'] = Variable<String>(mediaKey.value);
+    }
+    if (mediaMime.present) {
+      map['media_mime'] = Variable<String>(mediaMime.value);
+    }
+    if (mediaWidth.present) {
+      map['media_width'] = Variable<int>(mediaWidth.value);
+    }
+    if (mediaHeight.present) {
+      map['media_height'] = Variable<int>(mediaHeight.value);
+    }
+    if (mediaLocalPath.present) {
+      map['media_local_path'] = Variable<String>(mediaLocalPath.value);
+    }
     return map;
   }
 
@@ -884,7 +1245,14 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('senderLabel: $senderLabel, ')
           ..write('viewOnce: $viewOnce, ')
           ..write('viewed: $viewed, ')
-          ..write('expiresAt: $expiresAt')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('mediaType: $mediaType, ')
+          ..write('mediaBlobId: $mediaBlobId, ')
+          ..write('mediaKey: $mediaKey, ')
+          ..write('mediaMime: $mediaMime, ')
+          ..write('mediaWidth: $mediaWidth, ')
+          ..write('mediaHeight: $mediaHeight, ')
+          ..write('mediaLocalPath: $mediaLocalPath')
           ..write(')'))
         .toString();
   }
@@ -2109,6 +2477,13 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<bool> viewOnce,
       Value<bool> viewed,
       Value<int?> expiresAt,
+      Value<String?> mediaType,
+      Value<String?> mediaBlobId,
+      Value<String?> mediaKey,
+      Value<String?> mediaMime,
+      Value<int?> mediaWidth,
+      Value<int?> mediaHeight,
+      Value<String?> mediaLocalPath,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -2127,6 +2502,13 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<bool> viewOnce,
       Value<bool> viewed,
       Value<int?> expiresAt,
+      Value<String?> mediaType,
+      Value<String?> mediaBlobId,
+      Value<String?> mediaKey,
+      Value<String?> mediaMime,
+      Value<int?> mediaWidth,
+      Value<int?> mediaHeight,
+      Value<String?> mediaLocalPath,
     });
 
 class $$MessagesTableFilterComposer
@@ -2210,6 +2592,41 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<int> get expiresAt => $composableBuilder(
     column: $table.expiresAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaType => $composableBuilder(
+    column: $table.mediaType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaBlobId => $composableBuilder(
+    column: $table.mediaBlobId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaKey => $composableBuilder(
+    column: $table.mediaKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaMime => $composableBuilder(
+    column: $table.mediaMime,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get mediaWidth => $composableBuilder(
+    column: $table.mediaWidth,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get mediaHeight => $composableBuilder(
+    column: $table.mediaHeight,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaLocalPath => $composableBuilder(
+    column: $table.mediaLocalPath,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2297,6 +2714,41 @@ class $$MessagesTableOrderingComposer
     column: $table.expiresAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get mediaType => $composableBuilder(
+    column: $table.mediaType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mediaBlobId => $composableBuilder(
+    column: $table.mediaBlobId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mediaKey => $composableBuilder(
+    column: $table.mediaKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mediaMime => $composableBuilder(
+    column: $table.mediaMime,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get mediaWidth => $composableBuilder(
+    column: $table.mediaWidth,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get mediaHeight => $composableBuilder(
+    column: $table.mediaHeight,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mediaLocalPath => $composableBuilder(
+    column: $table.mediaLocalPath,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -2364,6 +2816,35 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<int> get expiresAt =>
       $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+
+  GeneratedColumn<String> get mediaType =>
+      $composableBuilder(column: $table.mediaType, builder: (column) => column);
+
+  GeneratedColumn<String> get mediaBlobId => $composableBuilder(
+    column: $table.mediaBlobId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get mediaKey =>
+      $composableBuilder(column: $table.mediaKey, builder: (column) => column);
+
+  GeneratedColumn<String> get mediaMime =>
+      $composableBuilder(column: $table.mediaMime, builder: (column) => column);
+
+  GeneratedColumn<int> get mediaWidth => $composableBuilder(
+    column: $table.mediaWidth,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get mediaHeight => $composableBuilder(
+    column: $table.mediaHeight,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get mediaLocalPath => $composableBuilder(
+    column: $table.mediaLocalPath,
+    builder: (column) => column,
+  );
 }
 
 class $$MessagesTableTableManager
@@ -2409,6 +2890,13 @@ class $$MessagesTableTableManager
                 Value<bool> viewOnce = const Value.absent(),
                 Value<bool> viewed = const Value.absent(),
                 Value<int?> expiresAt = const Value.absent(),
+                Value<String?> mediaType = const Value.absent(),
+                Value<String?> mediaBlobId = const Value.absent(),
+                Value<String?> mediaKey = const Value.absent(),
+                Value<String?> mediaMime = const Value.absent(),
+                Value<int?> mediaWidth = const Value.absent(),
+                Value<int?> mediaHeight = const Value.absent(),
+                Value<String?> mediaLocalPath = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
                 serverId: serverId,
@@ -2425,6 +2913,13 @@ class $$MessagesTableTableManager
                 viewOnce: viewOnce,
                 viewed: viewed,
                 expiresAt: expiresAt,
+                mediaType: mediaType,
+                mediaBlobId: mediaBlobId,
+                mediaKey: mediaKey,
+                mediaMime: mediaMime,
+                mediaWidth: mediaWidth,
+                mediaHeight: mediaHeight,
+                mediaLocalPath: mediaLocalPath,
               ),
           createCompanionCallback:
               ({
@@ -2443,6 +2938,13 @@ class $$MessagesTableTableManager
                 Value<bool> viewOnce = const Value.absent(),
                 Value<bool> viewed = const Value.absent(),
                 Value<int?> expiresAt = const Value.absent(),
+                Value<String?> mediaType = const Value.absent(),
+                Value<String?> mediaBlobId = const Value.absent(),
+                Value<String?> mediaKey = const Value.absent(),
+                Value<String?> mediaMime = const Value.absent(),
+                Value<int?> mediaWidth = const Value.absent(),
+                Value<int?> mediaHeight = const Value.absent(),
+                Value<String?> mediaLocalPath = const Value.absent(),
               }) => MessagesCompanion.insert(
                 localId: localId,
                 serverId: serverId,
@@ -2459,6 +2961,13 @@ class $$MessagesTableTableManager
                 viewOnce: viewOnce,
                 viewed: viewed,
                 expiresAt: expiresAt,
+                mediaType: mediaType,
+                mediaBlobId: mediaBlobId,
+                mediaKey: mediaKey,
+                mediaMime: mediaMime,
+                mediaWidth: mediaWidth,
+                mediaHeight: mediaHeight,
+                mediaLocalPath: mediaLocalPath,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

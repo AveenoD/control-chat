@@ -16,7 +16,8 @@ const cfg = loadBaseConfig({ SERVICE_NAME: "gateway" });
 const env = parseEnv(envSchema);
 const logger = createLogger(cfg);
 
-const app = Fastify({ loggerInstance: logger });
+// Allow large media uploads to stream through to chat-relay (encrypted blobs).
+const app = Fastify({ loggerInstance: logger, bodyLimit: 30 * 1024 * 1024 });
 await app.register(cors, { origin: true, credentials: true });
 
 const stripUnsupportedHeaders = (_req: any, headers: Record<string, any>) => {
@@ -118,6 +119,12 @@ await app.register(httpProxy, {
   upstream: env.CHAT_RELAY_SERVICE_URL,
   prefix: "/conversations",
   rewritePrefix: "/conversations",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.CHAT_RELAY_SERVICE_URL,
+  prefix: "/media",
+  rewritePrefix: "/media",
   replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
 });
 

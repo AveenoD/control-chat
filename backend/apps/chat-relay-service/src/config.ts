@@ -7,7 +7,15 @@ const schema = z.object({
   JWT_SECRET: z.string().min(16),
   // Phase 1: just reserve config knobs; Centrifugo publish comes later in phase 1.1
   CENTRIFUGO_API_URL: z.string().url().optional(),
-  CENTRIFUGO_API_KEY: z.string().min(1).optional()
+  CENTRIFUGO_API_KEY: z.string().min(1).optional(),
+  // S3-compatible media storage (MinIO in dev, Backblaze B2 in prod).
+  S3_ENDPOINT: z.string().url(),
+  S3_REGION: z.string().default("us-east-005"),
+  S3_BUCKET: z.string().min(1),
+  S3_ACCESS_KEY_ID: z.string().min(1),
+  S3_SECRET_ACCESS_KEY: z.string().min(1),
+  S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
+  MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(26_214_400)
 });
 
 export function loadChatRelayConfig() {

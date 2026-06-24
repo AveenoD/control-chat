@@ -43,6 +43,19 @@ class Messages extends Table {
 
   /// Disappearing-message expiry (epoch millis); null = never expires.
   IntColumn get expiresAt => integer().nullable()();
+
+  /// Media attachment metadata (null for plain text). The blob itself lives in
+  /// object storage as ciphertext; [mediaKey] decrypts it and is safe here
+  /// because the whole DB is encrypted-at-rest.
+  TextColumn get mediaType => text().nullable()();
+  TextColumn get mediaBlobId => text().nullable()();
+  TextColumn get mediaKey => text().nullable()();
+  TextColumn get mediaMime => text().nullable()();
+  IntColumn get mediaWidth => integer().nullable()();
+  IntColumn get mediaHeight => integer().nullable()();
+
+  /// Decrypted, cached local file path for display (null until downloaded).
+  TextColumn get mediaLocalPath => text().nullable()();
 }
 
 /// Per-conversation feature settings kept separate from the chat list so they
@@ -91,7 +104,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -116,6 +129,15 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(messages, messages.viewed);
             await m.addColumn(messages, messages.expiresAt);
             await m.createTable(conversationSettings);
+          }
+          if (from < 4) {
+            await m.addColumn(messages, messages.mediaType);
+            await m.addColumn(messages, messages.mediaBlobId);
+            await m.addColumn(messages, messages.mediaKey);
+            await m.addColumn(messages, messages.mediaMime);
+            await m.addColumn(messages, messages.mediaWidth);
+            await m.addColumn(messages, messages.mediaHeight);
+            await m.addColumn(messages, messages.mediaLocalPath);
           }
         },
       );

@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 
 
 
 import 'package:flutter/material.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:image_picker/image_picker.dart';
 
 import 'package:gap/gap.dart';
 
@@ -23,6 +26,8 @@ import '../../core/chat/chat_models.dart';
 import '../../core/chat/chat_repository.dart';
 
 import '../../core/chat/conversation_id.dart';
+
+import '../../core/chat/media_service.dart';
 
 import '../../core/chat/message_wire.dart';
 
@@ -433,6 +438,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
         clientMessageId: data['clientMessageId'] as String?,
         viewOnce: wire.viewOnce,
         expiresAt: wire.ttlSeconds > 0 ? now.add(Duration(seconds: wire.ttlSeconds)) : null,
+        mediaType: wire.mediaType,
+        mediaBlobId: wire.mediaBlobId,
+        mediaKey: wire.mediaKey,
+        mediaMime: wire.mediaMime,
+        mediaWidth: wire.mediaWidth,
+        mediaHeight: wire.mediaHeight,
       ),
     );
 
@@ -753,12 +764,180 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     if (m.clientMessageId == null) return;
     await ref.read(messageStoreProvider).markFailed(m.clientMessageId!, false);
     final ttl = m.expiresAt != null ? m.expiresAt!.difference(m.createdAt).inSeconds : 0;
+    if (m.isImage) {
+      final path = m.mediaLocalPath;
+      if (path == null || !File(path).existsSync()) {
+        await ref.read(messageStoreProvider).markFailed(m.clientMessageId!, true);
+        return;
+      }
+      final bytes = await File(path).readAsBytes();
+      final picked = PickedImage(
+        bytes: bytes,
+        mime: m.mediaMime ?? 'image/jpeg',
+        width: m.mediaWidth ?? 0,
+        height: m.mediaHeight ?? 0,
+      );
+      await _trySendImage(m.clientMessageId!, picked,
+          viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0);
+      return;
+    }
     await _trySend(m.clientMessageId!, m.text, viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0);
+  }
+
+  /// Reveal a one-time-view image once, then consume it (wipe + delete blob).
+  Future<void> _openViewOnceImage(ChatMessage m) async {
+    final blobId = m.mediaBlobId;
+    final key = m.mediaKey;
+    if (blobId == null || key == null) return;
+    final media = ref.read(mediaServiceProvider);
+    final path = m.mediaLocalPath ??
+        await media.ensureLocalFile(blobId: blobId, keyBase64: key, mime: m.mediaMime ?? 'image/jpeg');
+    if (path == null || !mounted) return;
+    await _showFullscreen(path);
+    await ref.read(messageStoreProvider).markViewed(m);
+    await media.deleteLocal(blobId);
+  }
+
+  Future<void> _showFullscreen(String path) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _FullscreenImage(path: path),
+        fullscreenDialog: true,
+      ),
+    );
+  }
+
+  /// Pick an image (camera/gallery) and send it.
+  Future<void> _pickAndSendImage() async {
+    if (_conversationId == null) return;
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Photo library'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Camera'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+
+    PickedImage? picked;
+    try {
+      picked = await ref.read(mediaServiceProvider).pickImage(source: source);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(e))));
+      }
+      return;
+    }
+    if (picked == null || !mounted) return;
+    await _sendImage(picked);
+  }
+
+  Future<void> _sendImage(PickedImage picked) async {
+    final myId = ref.read(sessionProvider).userId!;
+    final cmid = _uuid.v4();
+    final now = DateTime.now();
+    final store = ref.read(messageStoreProvider);
+    final media = ref.read(mediaServiceProvider);
+
+    final viewOnce = _viewOnceNext;
+    final ttl = _disappearingSeconds;
+    final expiresAt = ttl > 0 ? now.add(Duration(seconds: ttl)) : null;
+    if (_viewOnceNext) setState(() => _viewOnceNext = false);
+
+    // Show the image instantly on the sender side by caching a local copy keyed
+    // by the client message id (before we know the server blob id).
+    String? localPath;
+    try {
+      localPath = await media.cacheLocalCopy(blobId: cmid, bytes: picked.bytes, mime: picked.mime);
+    } catch (_) {}
+
+    await store.insertOptimistic(
+      clientMessageId: cmid,
+      conversationId: _conversationId!,
+      senderUserId: myId,
+      text: '',
+      createdAt: now,
+      viewOnce: viewOnce,
+      expiresAt: expiresAt,
+      mediaType: 'image',
+      mediaMime: picked.mime,
+      mediaWidth: picked.width,
+      mediaHeight: picked.height,
+      mediaLocalPath: localPath,
+    );
+
+    await _trySendImage(cmid, picked, viewOnce: viewOnce, ttlSeconds: ttl);
+  }
+
+  Future<void> _trySendImage(String cmid, PickedImage picked,
+      {bool viewOnce = false, int ttlSeconds = 0}) async {
+    final repo = ref.read(chatRepositoryProvider);
+    final store = ref.read(messageStoreProvider);
+    final media = ref.read(mediaServiceProvider);
+    try {
+      final uploaded = await media.encryptAndUpload(
+        bytes: picked.bytes,
+        conversationId: _conversationId!,
+        mime: picked.mime,
+      );
+      await store.setMediaBlob(cmid, uploaded.blobId, uploaded.keyBase64);
+
+      String envelopeId;
+      if (_isGroup && _groupId != null) {
+        envelopeId = await repo.sendGroupImage(
+          groupId: _groupId!,
+          blobId: uploaded.blobId,
+          blobKey: uploaded.keyBase64,
+          mime: picked.mime,
+          width: picked.width,
+          height: picked.height,
+          size: uploaded.size,
+          clientMessageId: cmid,
+          viewOnce: viewOnce,
+          ttlSeconds: ttlSeconds,
+        );
+      } else if (_peerUserId != null) {
+        envelopeId = await repo.sendDmImage(
+          recipientUserId: _peerUserId!,
+          blobId: uploaded.blobId,
+          blobKey: uploaded.keyBase64,
+          mime: picked.mime,
+          width: picked.width,
+          height: picked.height,
+          size: uploaded.size,
+          clientMessageId: cmid,
+          viewOnce: viewOnce,
+          ttlSeconds: ttlSeconds,
+        );
+      } else {
+        return;
+      }
+      await store.confirmSent(cmid, envelopeId);
+    } catch (_) {
+      await store.markFailed(cmid, true);
+    }
   }
 
   /// Open a one-time-view message: reveal its text once, then consume it.
   Future<void> _openViewOnce(ChatMessage m) async {
     if (m.viewed) return;
+    if (m.isImage) {
+      await _openViewOnceImage(m);
+      return;
+    }
     final body = m.text;
     await showDialog<void>(
       context: context,
@@ -1206,6 +1385,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
                 children: [
 
                   IconButton(
+                    tooltip: 'Send photo',
+                    onPressed: _pickAndSendImage,
+                    icon: const Icon(Icons.add_photo_alternate_outlined),
+                  ),
+
+                  IconButton(
                     tooltip: 'View once',
                     onPressed: () => setState(() => _viewOnceNext = !_viewOnceNext),
                     icon: Icon(
@@ -1438,7 +1623,14 @@ class _Bubble extends StatelessWidget {
               ],
             ),
           ),
-        Text(message.text, style: TextStyle(color: onColor, height: 1.35)),
+        if (message.isImage) _ChatImage(message: message),
+        if (message.isImage && message.text.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(message.text, style: TextStyle(color: onColor, height: 1.35)),
+          ),
+        if (!message.isImage)
+          Text(message.text, style: TextStyle(color: onColor, height: 1.35)),
       ],
     );
   }
@@ -1450,6 +1642,147 @@ class _Bubble extends StatelessWidget {
     if (message.deliveredToPeer) return (' ✓✓', Colors.white70);
     if (message.confirmedOnServer) return (' ✓', Colors.white70);
     return (' …', Colors.white54);
+  }
+}
+
+/// Thumbnail for an image message. Resolves the decrypted local file (download
+/// on first view), shows a sized placeholder while loading, and opens a
+/// fullscreen viewer on tap.
+class _ChatImage extends ConsumerStatefulWidget {
+  const _ChatImage({required this.message});
+
+  final ChatMessage message;
+
+  @override
+  ConsumerState<_ChatImage> createState() => _ChatImageState();
+}
+
+class _ChatImageState extends ConsumerState<_ChatImage> {
+  String? _path;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(_ChatImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final o = oldWidget.message;
+    final n = widget.message;
+    if (o.mediaLocalPath != n.mediaLocalPath || o.mediaBlobId != n.mediaBlobId) {
+      _path = null;
+      _resolve();
+    }
+  }
+
+  Future<void> _resolve() async {
+    final m = widget.message;
+    final local = m.mediaLocalPath;
+    if (local != null && File(local).existsSync()) {
+      setState(() => _path = local);
+      return;
+    }
+    final blobId = m.mediaBlobId;
+    final key = m.mediaKey;
+    if (blobId == null || key == null) return; // still uploading on our side
+    setState(() => _loading = true);
+    final path = await ref.read(mediaServiceProvider).ensureLocalFile(
+          blobId: blobId,
+          keyBase64: key,
+          mime: m.mediaMime ?? 'image/jpeg',
+        );
+    if (!mounted) return;
+    setState(() {
+      _path = path;
+      _loading = false;
+    });
+    if (path != null && m.confirmedOnServer) {
+      ref.read(messageStoreProvider).setMediaLocalPath(m.id, path);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.message;
+    const maxW = 230.0;
+    const maxH = 320.0;
+    double dispW = maxW;
+    double dispH = maxW;
+    final w = m.mediaWidth ?? 0;
+    final h = m.mediaHeight ?? 0;
+    if (w > 0 && h > 0) {
+      final ar = w / h;
+      dispW = maxW;
+      dispH = maxW / ar;
+      if (dispH > maxH) {
+        dispH = maxH;
+        dispW = maxH * ar;
+      }
+    }
+
+    final radius = BorderRadius.circular(12);
+    if (_path != null) {
+      return GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => _FullscreenImage(path: _path!),
+            fullscreenDialog: true,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: Image.file(
+            File(_path!),
+            width: dispW,
+            height: dispH,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: dispW,
+      height: dispH,
+      decoration: BoxDecoration(
+        color: const Color(0xFFE5E7EB),
+        borderRadius: radius,
+      ),
+      alignment: Alignment.center,
+      child: _loading
+          ? const SizedBox(
+              width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2))
+          : const Icon(Icons.image_outlined, color: Color(0xFF9AA3B2), size: 36),
+    );
+  }
+}
+
+class _FullscreenImage extends StatelessWidget {
+  const _FullscreenImage({required this.path});
+
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        elevation: 0,
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.8,
+          maxScale: 4,
+          child: Image.file(File(path)),
+        ),
+      ),
+    );
   }
 }
 

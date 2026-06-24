@@ -50,6 +50,34 @@ services:
       - "7881:7881"
       - "7882:7882/udp"
 
+  # S3-compatible object storage for E2EE media blobs.
+  # Local dev = MinIO. Production = Backblaze B2 (set S3_* in backend/.env).
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  # One-shot: create the media bucket on first boot.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin) do echo 'waiting for minio'; sleep 2; done;
+      /usr/bin/mc mb -p local/auratalk-media || true;
+      /usr/bin/mc anonymous set none local/auratalk-media || true;
+      echo 'minio bucket ready';
+      exit 0;
+      "
+
   gateway:
     build:
       context: .
@@ -126,13 +154,24 @@ services:
       JWT_SECRET: change-me-change-me-change-me
       CENTRIFUGO_API_URL: http://centrifugo:8000/api
       CENTRIFUGO_API_KEY: dev-change-me
+      # S3-compatible media storage. Defaults to MinIO; override in backend/.env for B2.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION: ${S3_REGION:-us-east-005}
+      S3_BUCKET: ${S3_BUCKET:-auratalk-media}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      MEDIA_MAX_BYTES: ${MEDIA_MAX_BYTES:-26214400}
     depends_on:
       postgres:
         condition: service_healthy
       centrifugo:
         condition: service_started
+      minio:
+        condition: service_started
 
 volumes:
   postgres_data:
   redis_data:
+  minio_data:
 
