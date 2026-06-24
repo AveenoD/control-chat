@@ -2,6 +2,8 @@
     <!-- Camera capture for sending photos. Gallery uses the Android Photo Picker
          (no storage permission needed on Android 13+). -->
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Microphone capture for recording voice notes. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <application
         android:label="mobile"
         android:name="${applicationName}"

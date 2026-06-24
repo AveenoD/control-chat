@@ -56,6 +56,14 @@ class Messages extends Table {
 
   /// Decrypted, cached local file path for display (null until downloaded).
   TextColumn get mediaLocalPath => text().nullable()();
+
+  /// Original filename and byte size for 'file' attachments.
+  TextColumn get mediaFilename => text().nullable()();
+  IntColumn get mediaSize => integer().nullable()();
+
+  /// Voice-note duration (ms) and comma-separated waveform bars (0–100).
+  IntColumn get mediaDurationMs => integer().nullable()();
+  TextColumn get mediaWaveform => text().nullable()();
 }
 
 /// Per-conversation feature settings kept separate from the chat list so they
@@ -104,7 +112,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -138,6 +146,14 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(messages, messages.mediaWidth);
             await m.addColumn(messages, messages.mediaHeight);
             await m.addColumn(messages, messages.mediaLocalPath);
+          }
+          if (from < 5) {
+            await m.addColumn(messages, messages.mediaFilename);
+            await m.addColumn(messages, messages.mediaSize);
+          }
+          if (from < 6) {
+            await m.addColumn(messages, messages.mediaDurationMs);
+            await m.addColumn(messages, messages.mediaWaveform);
           }
         },
       );

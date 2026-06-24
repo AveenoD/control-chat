@@ -17,7 +17,7 @@ const env = parseEnv(envSchema);
 const logger = createLogger(cfg);
 
 // Allow large media uploads to stream through to chat-relay (encrypted blobs).
-const app = Fastify({ loggerInstance: logger, bodyLimit: 30 * 1024 * 1024 });
+const app = Fastify({ loggerInstance: logger, bodyLimit: 60 * 1024 * 1024 });
 await app.register(cors, { origin: true, credentials: true });
 
 const stripUnsupportedHeaders = (_req: any, headers: Record<string, any>) => {

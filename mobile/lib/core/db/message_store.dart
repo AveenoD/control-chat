@@ -16,6 +16,17 @@ final messageStoreProvider = Provider<MessageStore>((ref) {
 
 bool _isSentinel(String body) => body.startsWith('🔒');
 
+String? _waveformToString(List<int>? bars) =>
+    (bars == null || bars.isEmpty) ? null : bars.join(',');
+
+List<int>? _parseWaveform(String? s) {
+  if (s == null || s.isEmpty) return null;
+  return s
+      .split(',')
+      .map((e) => int.tryParse(e) ?? 0)
+      .toList(growable: false);
+}
+
 /// Chat-shaped API over the local Drift database. Everything the UI shows is
 /// read from here; the network layer only writes into it. This is what makes
 /// the app offline-capable and instant on open.
@@ -48,6 +59,10 @@ class MessageStore {
         mediaWidth: r.mediaWidth,
         mediaHeight: r.mediaHeight,
         mediaLocalPath: r.mediaLocalPath,
+        mediaFilename: r.mediaFilename,
+        mediaSize: r.mediaSize,
+        mediaDurationMs: r.mediaDurationMs,
+        mediaWaveform: _parseWaveform(r.mediaWaveform),
       );
 
   /// Reactive stream of a conversation's messages, oldest → newest.
@@ -106,6 +121,10 @@ class MessageStore {
               mediaWidth: Value(m.mediaWidth),
               mediaHeight: Value(m.mediaHeight),
               mediaLocalPath: Value(m.mediaLocalPath),
+              mediaFilename: Value(m.mediaFilename),
+              mediaSize: Value(m.mediaSize),
+              mediaDurationMs: Value(m.mediaDurationMs),
+              mediaWaveform: Value(_waveformToString(m.mediaWaveform)),
             ),
           );
       return;
@@ -136,6 +155,10 @@ class MessageStore {
         mediaWidth: Value(m.mediaWidth ?? existing.mediaWidth),
         mediaHeight: Value(m.mediaHeight ?? existing.mediaHeight),
         mediaLocalPath: Value(existing.mediaLocalPath ?? m.mediaLocalPath),
+        mediaFilename: Value(m.mediaFilename ?? existing.mediaFilename),
+        mediaSize: Value(m.mediaSize ?? existing.mediaSize),
+        mediaDurationMs: Value(m.mediaDurationMs ?? existing.mediaDurationMs),
+        mediaWaveform: Value(_waveformToString(m.mediaWaveform) ?? existing.mediaWaveform),
       ),
     );
   }
@@ -160,6 +183,10 @@ class MessageStore {
     int? mediaWidth,
     int? mediaHeight,
     String? mediaLocalPath,
+    String? mediaFilename,
+    int? mediaSize,
+    int? mediaDurationMs,
+    List<int>? mediaWaveform,
   }) async {
     final existing = await _findByServerOrClient(null, clientMessageId);
     if (existing != null) return;
@@ -178,6 +205,10 @@ class MessageStore {
             mediaWidth: Value(mediaWidth),
             mediaHeight: Value(mediaHeight),
             mediaLocalPath: Value(mediaLocalPath),
+            mediaFilename: Value(mediaFilename),
+            mediaSize: Value(mediaSize),
+            mediaDurationMs: Value(mediaDurationMs),
+            mediaWaveform: Value(_waveformToString(mediaWaveform)),
           ),
         );
   }

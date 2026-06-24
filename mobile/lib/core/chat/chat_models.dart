@@ -68,6 +68,10 @@ class ChatMessage {
     this.mediaWidth,
     this.mediaHeight,
     this.mediaLocalPath,
+    this.mediaFilename,
+    this.mediaSize,
+    this.mediaDurationMs,
+    this.mediaWaveform,
   });
 
   final String id;
@@ -108,8 +112,22 @@ class ChatMessage {
   /// Decrypted local file path once downloaded/cached for display.
   final String? mediaLocalPath;
 
+  /// Original filename for 'file' attachments.
+  final String? mediaFilename;
+
+  /// Attachment size in bytes (for display).
+  final int? mediaSize;
+
+  /// Voice-note duration in milliseconds.
+  final int? mediaDurationMs;
+
+  /// Voice-note waveform bars (0–100).
+  final List<int>? mediaWaveform;
+
   bool get isMedia => mediaType != null && mediaBlobId != null;
   bool get isImage => mediaType == 'image';
+  bool get isFile => mediaType == 'file';
+  bool get isVoice => mediaType == 'voice';
 
   bool get confirmedOnServer => !id.startsWith('local-');
 
@@ -135,6 +153,10 @@ class ChatMessage {
     int? mediaWidth,
     int? mediaHeight,
     String? mediaLocalPath,
+    String? mediaFilename,
+    int? mediaSize,
+    int? mediaDurationMs,
+    List<int>? mediaWaveform,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -158,6 +180,10 @@ class ChatMessage {
       mediaWidth: mediaWidth ?? this.mediaWidth,
       mediaHeight: mediaHeight ?? this.mediaHeight,
       mediaLocalPath: mediaLocalPath ?? this.mediaLocalPath,
+      mediaFilename: mediaFilename ?? this.mediaFilename,
+      mediaSize: mediaSize ?? this.mediaSize,
+      mediaDurationMs: mediaDurationMs ?? this.mediaDurationMs,
+      mediaWaveform: mediaWaveform ?? this.mediaWaveform,
     );
   }
 }

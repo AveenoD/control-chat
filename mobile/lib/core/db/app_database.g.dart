@@ -272,6 +272,50 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _mediaFilenameMeta = const VerificationMeta(
+    'mediaFilename',
+  );
+  @override
+  late final GeneratedColumn<String> mediaFilename = GeneratedColumn<String>(
+    'media_filename',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaSizeMeta = const VerificationMeta(
+    'mediaSize',
+  );
+  @override
+  late final GeneratedColumn<int> mediaSize = GeneratedColumn<int>(
+    'media_size',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaDurationMsMeta = const VerificationMeta(
+    'mediaDurationMs',
+  );
+  @override
+  late final GeneratedColumn<int> mediaDurationMs = GeneratedColumn<int>(
+    'media_duration_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mediaWaveformMeta = const VerificationMeta(
+    'mediaWaveform',
+  );
+  @override
+  late final GeneratedColumn<String> mediaWaveform = GeneratedColumn<String>(
+    'media_waveform',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localId,
@@ -296,6 +340,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     mediaWidth,
     mediaHeight,
     mediaLocalPath,
+    mediaFilename,
+    mediaSize,
+    mediaDurationMs,
+    mediaWaveform,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -473,6 +521,39 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         ),
       );
     }
+    if (data.containsKey('media_filename')) {
+      context.handle(
+        _mediaFilenameMeta,
+        mediaFilename.isAcceptableOrUnknown(
+          data['media_filename']!,
+          _mediaFilenameMeta,
+        ),
+      );
+    }
+    if (data.containsKey('media_size')) {
+      context.handle(
+        _mediaSizeMeta,
+        mediaSize.isAcceptableOrUnknown(data['media_size']!, _mediaSizeMeta),
+      );
+    }
+    if (data.containsKey('media_duration_ms')) {
+      context.handle(
+        _mediaDurationMsMeta,
+        mediaDurationMs.isAcceptableOrUnknown(
+          data['media_duration_ms']!,
+          _mediaDurationMsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('media_waveform')) {
+      context.handle(
+        _mediaWaveformMeta,
+        mediaWaveform.isAcceptableOrUnknown(
+          data['media_waveform']!,
+          _mediaWaveformMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -570,6 +651,22 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.string,
         data['${effectivePrefix}media_local_path'],
       ),
+      mediaFilename: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_filename'],
+      ),
+      mediaSize: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}media_size'],
+      ),
+      mediaDurationMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}media_duration_ms'],
+      ),
+      mediaWaveform: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_waveform'],
+      ),
     );
   }
 
@@ -620,6 +717,14 @@ class Message extends DataClass implements Insertable<Message> {
 
   /// Decrypted, cached local file path for display (null until downloaded).
   final String? mediaLocalPath;
+
+  /// Original filename and byte size for 'file' attachments.
+  final String? mediaFilename;
+  final int? mediaSize;
+
+  /// Voice-note duration (ms) and comma-separated waveform bars (0–100).
+  final int? mediaDurationMs;
+  final String? mediaWaveform;
   const Message({
     required this.localId,
     this.serverId,
@@ -643,6 +748,10 @@ class Message extends DataClass implements Insertable<Message> {
     this.mediaWidth,
     this.mediaHeight,
     this.mediaLocalPath,
+    this.mediaFilename,
+    this.mediaSize,
+    this.mediaDurationMs,
+    this.mediaWaveform,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -690,6 +799,18 @@ class Message extends DataClass implements Insertable<Message> {
     }
     if (!nullToAbsent || mediaLocalPath != null) {
       map['media_local_path'] = Variable<String>(mediaLocalPath);
+    }
+    if (!nullToAbsent || mediaFilename != null) {
+      map['media_filename'] = Variable<String>(mediaFilename);
+    }
+    if (!nullToAbsent || mediaSize != null) {
+      map['media_size'] = Variable<int>(mediaSize);
+    }
+    if (!nullToAbsent || mediaDurationMs != null) {
+      map['media_duration_ms'] = Variable<int>(mediaDurationMs);
+    }
+    if (!nullToAbsent || mediaWaveform != null) {
+      map['media_waveform'] = Variable<String>(mediaWaveform);
     }
     return map;
   }
@@ -740,6 +861,18 @@ class Message extends DataClass implements Insertable<Message> {
       mediaLocalPath: mediaLocalPath == null && nullToAbsent
           ? const Value.absent()
           : Value(mediaLocalPath),
+      mediaFilename: mediaFilename == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaFilename),
+      mediaSize: mediaSize == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaSize),
+      mediaDurationMs: mediaDurationMs == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaDurationMs),
+      mediaWaveform: mediaWaveform == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaWaveform),
     );
   }
 
@@ -771,6 +904,10 @@ class Message extends DataClass implements Insertable<Message> {
       mediaWidth: serializer.fromJson<int?>(json['mediaWidth']),
       mediaHeight: serializer.fromJson<int?>(json['mediaHeight']),
       mediaLocalPath: serializer.fromJson<String?>(json['mediaLocalPath']),
+      mediaFilename: serializer.fromJson<String?>(json['mediaFilename']),
+      mediaSize: serializer.fromJson<int?>(json['mediaSize']),
+      mediaDurationMs: serializer.fromJson<int?>(json['mediaDurationMs']),
+      mediaWaveform: serializer.fromJson<String?>(json['mediaWaveform']),
     );
   }
   @override
@@ -799,6 +936,10 @@ class Message extends DataClass implements Insertable<Message> {
       'mediaWidth': serializer.toJson<int?>(mediaWidth),
       'mediaHeight': serializer.toJson<int?>(mediaHeight),
       'mediaLocalPath': serializer.toJson<String?>(mediaLocalPath),
+      'mediaFilename': serializer.toJson<String?>(mediaFilename),
+      'mediaSize': serializer.toJson<int?>(mediaSize),
+      'mediaDurationMs': serializer.toJson<int?>(mediaDurationMs),
+      'mediaWaveform': serializer.toJson<String?>(mediaWaveform),
     };
   }
 
@@ -825,6 +966,10 @@ class Message extends DataClass implements Insertable<Message> {
     Value<int?> mediaWidth = const Value.absent(),
     Value<int?> mediaHeight = const Value.absent(),
     Value<String?> mediaLocalPath = const Value.absent(),
+    Value<String?> mediaFilename = const Value.absent(),
+    Value<int?> mediaSize = const Value.absent(),
+    Value<int?> mediaDurationMs = const Value.absent(),
+    Value<String?> mediaWaveform = const Value.absent(),
   }) => Message(
     localId: localId ?? this.localId,
     serverId: serverId.present ? serverId.value : this.serverId,
@@ -852,6 +997,16 @@ class Message extends DataClass implements Insertable<Message> {
     mediaLocalPath: mediaLocalPath.present
         ? mediaLocalPath.value
         : this.mediaLocalPath,
+    mediaFilename: mediaFilename.present
+        ? mediaFilename.value
+        : this.mediaFilename,
+    mediaSize: mediaSize.present ? mediaSize.value : this.mediaSize,
+    mediaDurationMs: mediaDurationMs.present
+        ? mediaDurationMs.value
+        : this.mediaDurationMs,
+    mediaWaveform: mediaWaveform.present
+        ? mediaWaveform.value
+        : this.mediaWaveform,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -897,6 +1052,16 @@ class Message extends DataClass implements Insertable<Message> {
       mediaLocalPath: data.mediaLocalPath.present
           ? data.mediaLocalPath.value
           : this.mediaLocalPath,
+      mediaFilename: data.mediaFilename.present
+          ? data.mediaFilename.value
+          : this.mediaFilename,
+      mediaSize: data.mediaSize.present ? data.mediaSize.value : this.mediaSize,
+      mediaDurationMs: data.mediaDurationMs.present
+          ? data.mediaDurationMs.value
+          : this.mediaDurationMs,
+      mediaWaveform: data.mediaWaveform.present
+          ? data.mediaWaveform.value
+          : this.mediaWaveform,
     );
   }
 
@@ -924,7 +1089,11 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('mediaMime: $mediaMime, ')
           ..write('mediaWidth: $mediaWidth, ')
           ..write('mediaHeight: $mediaHeight, ')
-          ..write('mediaLocalPath: $mediaLocalPath')
+          ..write('mediaLocalPath: $mediaLocalPath, ')
+          ..write('mediaFilename: $mediaFilename, ')
+          ..write('mediaSize: $mediaSize, ')
+          ..write('mediaDurationMs: $mediaDurationMs, ')
+          ..write('mediaWaveform: $mediaWaveform')
           ..write(')'))
         .toString();
   }
@@ -953,6 +1122,10 @@ class Message extends DataClass implements Insertable<Message> {
     mediaWidth,
     mediaHeight,
     mediaLocalPath,
+    mediaFilename,
+    mediaSize,
+    mediaDurationMs,
+    mediaWaveform,
   ]);
   @override
   bool operator ==(Object other) =>
@@ -979,7 +1152,11 @@ class Message extends DataClass implements Insertable<Message> {
           other.mediaMime == this.mediaMime &&
           other.mediaWidth == this.mediaWidth &&
           other.mediaHeight == this.mediaHeight &&
-          other.mediaLocalPath == this.mediaLocalPath);
+          other.mediaLocalPath == this.mediaLocalPath &&
+          other.mediaFilename == this.mediaFilename &&
+          other.mediaSize == this.mediaSize &&
+          other.mediaDurationMs == this.mediaDurationMs &&
+          other.mediaWaveform == this.mediaWaveform);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -1005,6 +1182,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int?> mediaWidth;
   final Value<int?> mediaHeight;
   final Value<String?> mediaLocalPath;
+  final Value<String?> mediaFilename;
+  final Value<int?> mediaSize;
+  final Value<int?> mediaDurationMs;
+  final Value<String?> mediaWaveform;
   const MessagesCompanion({
     this.localId = const Value.absent(),
     this.serverId = const Value.absent(),
@@ -1028,6 +1209,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.mediaWidth = const Value.absent(),
     this.mediaHeight = const Value.absent(),
     this.mediaLocalPath = const Value.absent(),
+    this.mediaFilename = const Value.absent(),
+    this.mediaSize = const Value.absent(),
+    this.mediaDurationMs = const Value.absent(),
+    this.mediaWaveform = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.localId = const Value.absent(),
@@ -1052,6 +1237,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.mediaWidth = const Value.absent(),
     this.mediaHeight = const Value.absent(),
     this.mediaLocalPath = const Value.absent(),
+    this.mediaFilename = const Value.absent(),
+    this.mediaSize = const Value.absent(),
+    this.mediaDurationMs = const Value.absent(),
+    this.mediaWaveform = const Value.absent(),
   }) : conversationId = Value(conversationId),
        senderUserId = Value(senderUserId),
        body = Value(body),
@@ -1079,6 +1268,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? mediaWidth,
     Expression<int>? mediaHeight,
     Expression<String>? mediaLocalPath,
+    Expression<String>? mediaFilename,
+    Expression<int>? mediaSize,
+    Expression<int>? mediaDurationMs,
+    Expression<String>? mediaWaveform,
   }) {
     return RawValuesInsertable({
       if (localId != null) 'local_id': localId,
@@ -1103,6 +1296,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (mediaWidth != null) 'media_width': mediaWidth,
       if (mediaHeight != null) 'media_height': mediaHeight,
       if (mediaLocalPath != null) 'media_local_path': mediaLocalPath,
+      if (mediaFilename != null) 'media_filename': mediaFilename,
+      if (mediaSize != null) 'media_size': mediaSize,
+      if (mediaDurationMs != null) 'media_duration_ms': mediaDurationMs,
+      if (mediaWaveform != null) 'media_waveform': mediaWaveform,
     });
   }
 
@@ -1129,6 +1326,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int?>? mediaWidth,
     Value<int?>? mediaHeight,
     Value<String?>? mediaLocalPath,
+    Value<String?>? mediaFilename,
+    Value<int?>? mediaSize,
+    Value<int?>? mediaDurationMs,
+    Value<String?>? mediaWaveform,
   }) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -1153,6 +1354,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       mediaWidth: mediaWidth ?? this.mediaWidth,
       mediaHeight: mediaHeight ?? this.mediaHeight,
       mediaLocalPath: mediaLocalPath ?? this.mediaLocalPath,
+      mediaFilename: mediaFilename ?? this.mediaFilename,
+      mediaSize: mediaSize ?? this.mediaSize,
+      mediaDurationMs: mediaDurationMs ?? this.mediaDurationMs,
+      mediaWaveform: mediaWaveform ?? this.mediaWaveform,
     );
   }
 
@@ -1225,6 +1430,18 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (mediaLocalPath.present) {
       map['media_local_path'] = Variable<String>(mediaLocalPath.value);
     }
+    if (mediaFilename.present) {
+      map['media_filename'] = Variable<String>(mediaFilename.value);
+    }
+    if (mediaSize.present) {
+      map['media_size'] = Variable<int>(mediaSize.value);
+    }
+    if (mediaDurationMs.present) {
+      map['media_duration_ms'] = Variable<int>(mediaDurationMs.value);
+    }
+    if (mediaWaveform.present) {
+      map['media_waveform'] = Variable<String>(mediaWaveform.value);
+    }
     return map;
   }
 
@@ -1252,7 +1469,11 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('mediaMime: $mediaMime, ')
           ..write('mediaWidth: $mediaWidth, ')
           ..write('mediaHeight: $mediaHeight, ')
-          ..write('mediaLocalPath: $mediaLocalPath')
+          ..write('mediaLocalPath: $mediaLocalPath, ')
+          ..write('mediaFilename: $mediaFilename, ')
+          ..write('mediaSize: $mediaSize, ')
+          ..write('mediaDurationMs: $mediaDurationMs, ')
+          ..write('mediaWaveform: $mediaWaveform')
           ..write(')'))
         .toString();
   }
@@ -2484,6 +2705,10 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int?> mediaWidth,
       Value<int?> mediaHeight,
       Value<String?> mediaLocalPath,
+      Value<String?> mediaFilename,
+      Value<int?> mediaSize,
+      Value<int?> mediaDurationMs,
+      Value<String?> mediaWaveform,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -2509,6 +2734,10 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int?> mediaWidth,
       Value<int?> mediaHeight,
       Value<String?> mediaLocalPath,
+      Value<String?> mediaFilename,
+      Value<int?> mediaSize,
+      Value<int?> mediaDurationMs,
+      Value<String?> mediaWaveform,
     });
 
 class $$MessagesTableFilterComposer
@@ -2627,6 +2856,26 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get mediaLocalPath => $composableBuilder(
     column: $table.mediaLocalPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaFilename => $composableBuilder(
+    column: $table.mediaFilename,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get mediaSize => $composableBuilder(
+    column: $table.mediaSize,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get mediaDurationMs => $composableBuilder(
+    column: $table.mediaDurationMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaWaveform => $composableBuilder(
+    column: $table.mediaWaveform,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2749,6 +2998,26 @@ class $$MessagesTableOrderingComposer
     column: $table.mediaLocalPath,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get mediaFilename => $composableBuilder(
+    column: $table.mediaFilename,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get mediaSize => $composableBuilder(
+    column: $table.mediaSize,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get mediaDurationMs => $composableBuilder(
+    column: $table.mediaDurationMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mediaWaveform => $composableBuilder(
+    column: $table.mediaWaveform,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -2845,6 +3114,24 @@ class $$MessagesTableAnnotationComposer
     column: $table.mediaLocalPath,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get mediaFilename => $composableBuilder(
+    column: $table.mediaFilename,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get mediaSize =>
+      $composableBuilder(column: $table.mediaSize, builder: (column) => column);
+
+  GeneratedColumn<int> get mediaDurationMs => $composableBuilder(
+    column: $table.mediaDurationMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get mediaWaveform => $composableBuilder(
+    column: $table.mediaWaveform,
+    builder: (column) => column,
+  );
 }
 
 class $$MessagesTableTableManager
@@ -2897,6 +3184,10 @@ class $$MessagesTableTableManager
                 Value<int?> mediaWidth = const Value.absent(),
                 Value<int?> mediaHeight = const Value.absent(),
                 Value<String?> mediaLocalPath = const Value.absent(),
+                Value<String?> mediaFilename = const Value.absent(),
+                Value<int?> mediaSize = const Value.absent(),
+                Value<int?> mediaDurationMs = const Value.absent(),
+                Value<String?> mediaWaveform = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
                 serverId: serverId,
@@ -2920,6 +3211,10 @@ class $$MessagesTableTableManager
                 mediaWidth: mediaWidth,
                 mediaHeight: mediaHeight,
                 mediaLocalPath: mediaLocalPath,
+                mediaFilename: mediaFilename,
+                mediaSize: mediaSize,
+                mediaDurationMs: mediaDurationMs,
+                mediaWaveform: mediaWaveform,
               ),
           createCompanionCallback:
               ({
@@ -2945,6 +3240,10 @@ class $$MessagesTableTableManager
                 Value<int?> mediaWidth = const Value.absent(),
                 Value<int?> mediaHeight = const Value.absent(),
                 Value<String?> mediaLocalPath = const Value.absent(),
+                Value<String?> mediaFilename = const Value.absent(),
+                Value<int?> mediaSize = const Value.absent(),
+                Value<int?> mediaDurationMs = const Value.absent(),
+                Value<String?> mediaWaveform = const Value.absent(),
               }) => MessagesCompanion.insert(
                 localId: localId,
                 serverId: serverId,
@@ -2968,6 +3267,10 @@ class $$MessagesTableTableManager
                 mediaWidth: mediaWidth,
                 mediaHeight: mediaHeight,
                 mediaLocalPath: mediaLocalPath,
+                mediaFilename: mediaFilename,
+                mediaSize: mediaSize,
+                mediaDurationMs: mediaDurationMs,
+                mediaWaveform: mediaWaveform,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

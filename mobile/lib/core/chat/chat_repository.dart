@@ -162,6 +162,10 @@ class ChatRepository {
       mediaMime: wire.mediaMime,
       mediaWidth: wire.mediaWidth,
       mediaHeight: wire.mediaHeight,
+      mediaFilename: wire.mediaFilename,
+      mediaSize: wire.mediaSize,
+      mediaDurationMs: wire.mediaDurationMs,
+      mediaWaveform: wire.mediaWaveform,
     );
   }
 
@@ -350,6 +354,66 @@ class ChatRepository {
     );
   }
 
+  /// Sends a generic file as a DM (key travels E2EE inside the wire payload).
+  Future<String> sendDmFile({
+    required String recipientUserId,
+    required String blobId,
+    required String blobKey,
+    required String filename,
+    required String mime,
+    int? size,
+    String caption = '',
+    String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeFile(
+      blobId: blobId,
+      blobKey: blobKey,
+      filename: filename,
+      mime: mime,
+      size: size,
+      caption: caption,
+      viewOnce: viewOnce,
+      ttlSeconds: ttlSeconds,
+    );
+    return _sendDmWire(
+      recipientUserId: recipientUserId,
+      wired: wired,
+      clientMessageId: clientMessageId,
+    );
+  }
+
+  /// Sends a voice note as a DM (key travels E2EE inside the wire payload).
+  Future<String> sendDmVoice({
+    required String recipientUserId,
+    required String blobId,
+    required String blobKey,
+    required String mime,
+    required int durationMs,
+    List<int> waveform = const [],
+    int? size,
+    String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeVoice(
+      blobId: blobId,
+      blobKey: blobKey,
+      mime: mime,
+      durationMs: durationMs,
+      waveform: waveform,
+      size: size,
+      viewOnce: viewOnce,
+      ttlSeconds: ttlSeconds,
+    );
+    return _sendDmWire(
+      recipientUserId: recipientUserId,
+      wired: wired,
+      clientMessageId: clientMessageId,
+    );
+  }
+
   Future<String> _sendDmWire({
     required String recipientUserId,
     required String wired,
@@ -443,6 +507,56 @@ class ChatRepository {
       height: height,
       size: size,
       caption: caption,
+      viewOnce: viewOnce,
+      ttlSeconds: ttlSeconds,
+    );
+    return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
+  }
+
+  Future<String> sendGroupFile({
+    required String groupId,
+    required String blobId,
+    required String blobKey,
+    required String filename,
+    required String mime,
+    int? size,
+    String caption = '',
+    String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeFile(
+      blobId: blobId,
+      blobKey: blobKey,
+      filename: filename,
+      mime: mime,
+      size: size,
+      caption: caption,
+      viewOnce: viewOnce,
+      ttlSeconds: ttlSeconds,
+    );
+    return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
+  }
+
+  Future<String> sendGroupVoice({
+    required String groupId,
+    required String blobId,
+    required String blobKey,
+    required String mime,
+    required int durationMs,
+    List<int> waveform = const [],
+    int? size,
+    String? clientMessageId,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final wired = ChatWire.encodeVoice(
+      blobId: blobId,
+      blobKey: blobKey,
+      mime: mime,
+      durationMs: durationMs,
+      waveform: waveform,
+      size: size,
       viewOnce: viewOnce,
       ttlSeconds: ttlSeconds,
     );

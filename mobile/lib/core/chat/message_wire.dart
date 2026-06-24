@@ -23,6 +23,9 @@ class WireMessage {
     this.mediaWidth,
     this.mediaHeight,
     this.mediaSize,
+    this.mediaFilename,
+    this.mediaDurationMs,
+    this.mediaWaveform,
   });
 
   /// For media messages [text] is the (optional) caption.
@@ -51,6 +54,15 @@ class WireMessage {
   final int? mediaWidth;
   final int? mediaHeight;
   final int? mediaSize;
+
+  /// Original filename (for 'file' attachments).
+  final String? mediaFilename;
+
+  /// Duration in milliseconds (for 'voice' attachments).
+  final int? mediaDurationMs;
+
+  /// Normalised waveform bars 0–100 (for 'voice' attachments).
+  final List<int>? mediaWaveform;
 
   bool get isMedia => mediaType != null && mediaBlobId != null && mediaKey != null;
 }
@@ -101,6 +113,57 @@ class ChatWire {
     return '$_kMarker${jsonEncode(m)}';
   }
 
+  /// Encodes a generic file (document/any) message.
+  static String encodeFile({
+    required String blobId,
+    required String blobKey,
+    required String filename,
+    required String mime,
+    int? size,
+    String caption = '',
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final m = <String, dynamic>{
+      'mt': 'file',
+      'bid': blobId,
+      'bk': blobKey,
+      'fn': filename,
+      'mime': mime,
+    };
+    if (size != null) m['sz'] = size;
+    if (caption.isNotEmpty) m['b'] = caption;
+    if (viewOnce) m['vo'] = true;
+    if (ttlSeconds > 0) m['ttl'] = ttlSeconds;
+    return '$_kMarker${jsonEncode(m)}';
+  }
+
+  /// Encodes a voice note. Carries duration + a compact waveform so the
+  /// recipient can render the same bars without decoding the audio first.
+  static String encodeVoice({
+    required String blobId,
+    required String blobKey,
+    required String mime,
+    required int durationMs,
+    List<int> waveform = const [],
+    int? size,
+    bool viewOnce = false,
+    int ttlSeconds = 0,
+  }) {
+    final m = <String, dynamic>{
+      'mt': 'voice',
+      'bid': blobId,
+      'bk': blobKey,
+      'mime': mime,
+      'dur': durationMs,
+    };
+    if (waveform.isNotEmpty) m['wf'] = waveform;
+    if (size != null) m['sz'] = size;
+    if (viewOnce) m['vo'] = true;
+    if (ttlSeconds > 0) m['ttl'] = ttlSeconds;
+    return '$_kMarker${jsonEncode(m)}';
+  }
+
   static WireMessage decode(String body) {
     if (!body.startsWith(_kMarker)) return WireMessage(text: body);
     try {
@@ -123,6 +186,9 @@ class ChatWire {
         mediaWidth: (j['w'] as num?)?.toInt(),
         mediaHeight: (j['h'] as num?)?.toInt(),
         mediaSize: (j['sz'] as num?)?.toInt(),
+        mediaFilename: j['fn'] as String?,
+        mediaDurationMs: (j['dur'] as num?)?.toInt(),
+        mediaWaveform: (j['wf'] as List?)?.map((e) => (e as num).toInt()).toList(),
       );
     } catch (_) {
       // Corrupt/unknown payload — show the raw text rather than losing it.
