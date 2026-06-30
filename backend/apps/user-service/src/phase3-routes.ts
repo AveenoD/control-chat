@@ -732,6 +732,151 @@ export function registerPhase3Routes(
     return reply.send({ ok: true, envelope: res.rows[0] ?? null, envelopes: res.rows });
   });
 
+  // --- Group invite links ---
+
+  // Admin: fetch (reuse) or mint the group's shareable invite token.
+  app.post("/groups/:groupId/invite", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    if (!(await isGroupAdmin(db, params.groupId, userId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+    const existing = await db.query<{ token: string }>(
+      `SELECT token FROM group_invites
+       WHERE group_id = $1 AND revoked = false
+         AND (expires_at IS NULL OR expires_at > now())
+       ORDER BY created_at DESC LIMIT 1`,
+      [params.groupId]
+    );
+    let token = existing.rows[0]?.token;
+    if (!token) {
+      token = b64url(randomBytes(12));
+      await db.query(
+        `INSERT INTO group_invites (token, group_id, created_by) VALUES ($1, $2, $3)`,
+        [token, params.groupId, userId]
+      );
+    }
+    return reply.send({ ok: true, token });
+  });
+
+  // Admin: revoke all active tokens (any existing link stops working).
+  app.post("/groups/:groupId/invite/revoke", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    if (!(await isGroupAdmin(db, params.groupId, userId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+    await db.query(
+      `UPDATE group_invites SET revoked = true WHERE group_id = $1 AND revoked = false`,
+      [params.groupId]
+    );
+    return reply.send({ ok: true });
+  });
+
+  // Any signed-in user: preview a group before joining via its invite token.
+  app.get("/groups/invite/:token", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ token: z.string().min(8).max(128) }).parse(req.params);
+    const inv = await db.query<{ group_id: string }>(
+      `SELECT group_id FROM group_invites
+       WHERE token = $1 AND revoked = false
+         AND (expires_at IS NULL OR expires_at > now()) LIMIT 1`,
+      [params.token]
+    );
+    const groupId = inv.rows[0]?.group_id;
+    if (!groupId) return reply.code(404).send({ ok: false, error: "Invite not found or expired" });
+    const g = await db.query(
+      `SELECT g.id, g.title, g.avatar_blob_id, g.avatar_key,
+              (SELECT COUNT(*)::int FROM group_members gm WHERE gm.group_id = g.id) AS member_count
+       FROM groups g WHERE g.id = $1`,
+      [groupId]
+    );
+    const row = g.rows[0] as any;
+    if (!row) return reply.code(404).send({ ok: false, error: "Group not found" });
+    const mem = await db.query(
+      `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2`,
+      [groupId, userId]
+    );
+    return reply.send({
+      ok: true,
+      group: { ...row, conversation_id: `group:${row.id}` },
+      alreadyMember: (mem.rowCount ?? 0) > 0
+    });
+  });
+
+  // Any signed-in user: join a group through its invite token (idempotent).
+  app.post("/groups/invite/:token/join", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ token: z.string().min(8).max(128) }).parse(req.params);
+    const inv = await db.query<{ group_id: string }>(
+      `SELECT group_id FROM group_invites
+       WHERE token = $1 AND revoked = false
+         AND (expires_at IS NULL OR expires_at > now()) LIMIT 1`,
+      [params.token]
+    );
+    const groupId = inv.rows[0]?.group_id;
+    if (!groupId) return reply.code(404).send({ ok: false, error: "Invite not found or expired" });
+
+    const existing = await db.query(
+      `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2`,
+      [groupId, userId]
+    );
+    if ((existing.rowCount ?? 0) > 0) {
+      return reply.send({ ok: true, groupId, conversationId: `group:${groupId}`, alreadyMember: true });
+    }
+    await db.query(
+      `INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`,
+      [groupId, userId]
+    );
+    const label = await getUserLabel(db, userId);
+    await emitGroupSystemEvent(db, opts, {
+      groupId,
+      type: "member_joined",
+      actorUserId: userId,
+      actorName: label
+    });
+    return reply.send({ ok: true, groupId, conversationId: `group:${groupId}` });
+  });
+
+  // Sender-only: who has read a specific group message ("Seen by N").
+  // Read cursors only exist for users who allow read receipts, so this
+  // automatically respects the reader's privacy setting.
+  app.get("/groups/:groupId/messages/:messageId/seen", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z
+      .object({ groupId: z.string().uuid(), messageId: z.string().uuid() })
+      .parse(req.params);
+    const conv = `group:${params.groupId}`;
+    const target = await db.query<{ sender_user_id: string; created_at: string }>(
+      `SELECT sender_user_id, created_at FROM message_envelopes
+       WHERE message_id = $1 AND conversation_id = $2 LIMIT 1`,
+      [params.messageId, conv]
+    );
+    const t = target.rows[0];
+    if (!t) return reply.code(404).send({ ok: false, error: "Message not found" });
+    if (t.sender_user_id !== userId) {
+      return reply.code(403).send({ ok: false, error: "Only the sender can view read receipts" });
+    }
+    const res = await db.query(
+      `
+      SELECT u.id AS user_id, u.username, u.display_name, rc.updated_at AS read_at
+      FROM read_cursors rc
+      JOIN group_members gm ON gm.group_id = $1 AND gm.user_id = rc.user_id
+      JOIN users u ON u.id = rc.user_id
+      WHERE rc.conversation_id = $2
+        AND rc.user_id <> $3
+        AND EXISTS (
+          SELECT 1 FROM message_envelopes me
+          WHERE me.message_id = rc.last_read_envelope_id
+            AND me.created_at >= $4
+        )
+      ORDER BY rc.updated_at DESC
+      `,
+      [params.groupId, conv, userId, t.created_at]
+    );
+    return reply.send({ ok: true, readers: res.rows });
+  });
+
   // --- Calls (LiveKit dev) ---
   app.post("/calls/start", async (req: any, reply: any) => {
     const userId = req.user.sub as string;

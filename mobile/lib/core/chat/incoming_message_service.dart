@@ -232,12 +232,23 @@ class IncomingMessageService {
       groups.invalidateEpoch(groupId);
       groups.rotateIfNeeded(groupId).catchError((_) {});
     }
+
+    // A new member (added or joined via link) has no key yet → any key-holder
+    // re-seals the current key to all member devices, reaching the newcomer.
+    if (groupId != null && (eventType == 'member_added' || eventType == 'member_joined')) {
+      _ref
+          .read(groupRepositoryProvider)
+          .ensureKeyDistributed(groupId, force: true)
+          .catchError((_) {});
+    }
   }
 
   String _systemText(String eventType, String actor, String target, {String? newTitle}) {
     switch (eventType) {
       case 'member_added':
         return '$actor added $target';
+      case 'member_joined':
+        return '$actor joined via invite link';
       case 'member_removed':
         return '$actor removed $target';
       case 'member_left':

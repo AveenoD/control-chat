@@ -5,9 +5,13 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 
+import 'package:flutter/gestures.dart';
+
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
+
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -32,6 +36,8 @@ import '../../core/calls/call_repository.dart';
 import '../../core/security/screen_security.dart';
 
 import 'group_avatar.dart';
+
+import 'group_invite.dart';
 
 import '../../core/chat/chat_models.dart';
 
@@ -336,6 +342,80 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => GroupInfoScreen(groupId: gid, title: widget.title, isLeft: _leftGroup),
+      ),
+    );
+  }
+
+  /// Tapping a link in a bubble: our own group invite links join in-app; any
+  /// other URL opens in the browser (falling back to copy if it can't launch).
+  Future<void> _handleLinkTap(String url) async {
+    if (url.startsWith(kGroupInviteLinkBase)) {
+      final token = parseInviteToken(url);
+      if (token != null) {
+        await _joinViaInviteToken(token);
+        return;
+      }
+    }
+    final uri = Uri.tryParse(url);
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: url));
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Link copied')));
+    }
+  }
+
+  Future<void> _joinViaInviteToken(String token) async {
+    final repo = ref.read(groupRepositoryProvider);
+    GroupInvitePreview preview;
+    try {
+      preview = await repo.previewInvite(token);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invite link is invalid or expired')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+
+    if (!preview.alreadyMember) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(preview.title),
+          content: Text('${preview.memberCount} members · Join this group?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Join')),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+      try {
+        await repo.joinByInvite(token);
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not join the group')),
+          );
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatThreadScreen(
+          conversationId: preview.conversationId,
+          title: preview.title,
+          groupId: preview.groupId,
+          isGroup: true,
+        ),
       ),
     );
   }
@@ -1193,7 +1273,101 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
                       .showSnackBar(const SnackBar(content: Text('Copied')));
                 },
               ),
+            if (_isGroup && m.isMine && m.confirmedOnServer)
+              ListTile(
+                leading: const Icon(Icons.done_all),
+                title: const Text('Message info'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showMessageInfo(m);
+                },
+              ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Group "Seen by N": who has read this (own) message. Fetched on demand;
+  /// only the sender can see it, and readers who disabled read receipts won't
+  /// appear (the backend has no cursor for them).
+  Future<void> _showMessageInfo(ChatMessage m) async {
+    final gid = _groupId;
+    if (gid == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.5,
+        maxChildSize: 0.85,
+        builder: (ctx, scrollController) => FutureBuilder<List<SeenReader>>(
+          future: ref.read(groupRepositoryProvider).messageSeenBy(gid, m.id),
+          builder: (ctx, snap) {
+            final readers = snap.data ?? const <SeenReader>[];
+            return ListView(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD1D5DB),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const Gap(16),
+                Row(
+                  children: [
+                    const Icon(Icons.done_all, size: 20),
+                    const Gap(8),
+                    Text(
+                      snap.connectionState == ConnectionState.waiting
+                          ? 'Read by…'
+                          : 'Read by ${readers.length}',
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+                const Gap(12),
+                if (snap.connectionState == ConnectionState.waiting)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (readers.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'No one has read this yet.',
+                      style: Theme.of(ctx).textTheme.bodyMedium,
+                    ),
+                  )
+                else
+                  ...readers.map(
+                    (r) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        child: Text(r.label.isNotEmpty
+                            ? r.label.replaceFirst('@', '')[0].toUpperCase()
+                            : '?'),
+                      ),
+                      title: Text(r.label),
+                      subtitle: r.username != null ? Text('@${r.username}') : null,
+                      trailing: r.readAt != null
+                          ? Text(
+                              DateFormat.jm().format(r.readAt!.toLocal()),
+                              style: Theme.of(ctx).textTheme.bodySmall,
+                            )
+                          : null,
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -2419,6 +2593,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
                                     showSender: _isGroup && !m.isMine,
                                     mentionUsernames: _memberUsernames,
                                     myUsername: _myUsername,
+                                    onOpenLink: _handleLinkTap,
                                     uploadProgress: progress,
                                     highlighted: _highlightedId != null && m.id == _highlightedId,
                                     reactions: _reactions[m.id] ?? const [],
@@ -2685,6 +2860,119 @@ class _TypingIndicatorState extends State<_TypingIndicator> {
   }
 }
 
+/// Renders message text with tappable URLs and highlighted `@mentions`.
+/// Manages the lifecycle of its tap recognizers so they don't leak.
+class _LinkableText extends StatefulWidget {
+  const _LinkableText({
+    required this.text,
+    required this.style,
+    required this.isMine,
+    required this.primary,
+    this.mentionUsernames = const {},
+    this.myUsername,
+    this.onOpenLink,
+  });
+
+  final String text;
+  final TextStyle style;
+  final bool isMine;
+  final Color primary;
+  final Set<String> mentionUsernames;
+  final String? myUsername;
+  final void Function(String url)? onOpenLink;
+
+  @override
+  State<_LinkableText> createState() => _LinkableTextState();
+}
+
+class _LinkableTextState extends State<_LinkableText> {
+  final List<TapGestureRecognizer> _recognizers = [];
+
+  // URL or @mention token.
+  static final RegExp _re =
+      RegExp(r'(https?:\/\/[^\s]+)|(@[A-Za-z0-9_]+)');
+
+  @override
+  void dispose() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    _recognizers.clear();
+
+    final text = widget.text;
+    final linkColor = widget.isMine ? Colors.white : widget.primary;
+    final spans = <InlineSpan>[];
+    var last = 0;
+
+    for (final m in _re.allMatches(text)) {
+      final url = m.group(1);
+      final mention = m.group(2);
+
+      // Only treat as a mention if it resolves to a real group member.
+      if (mention != null &&
+          !widget.mentionUsernames.contains(mention.substring(1))) {
+        continue;
+      }
+
+      if (m.start > last) {
+        spans.add(TextSpan(text: text.substring(last, m.start)));
+      }
+
+      if (url != null) {
+        // Trim trailing punctuation that commonly abuts a pasted URL.
+        var clean = url;
+        var trailing = '';
+        while (clean.isNotEmpty && '.,!?)]}'.contains(clean[clean.length - 1])) {
+          trailing = clean[clean.length - 1] + trailing;
+          clean = clean.substring(0, clean.length - 1);
+        }
+        final recognizer = TapGestureRecognizer()
+          ..onTap = () => widget.onOpenLink?.call(clean);
+        _recognizers.add(recognizer);
+        spans.add(TextSpan(
+          text: clean,
+          style: TextStyle(
+            color: linkColor,
+            decoration: TextDecoration.underline,
+            decorationColor: linkColor,
+          ),
+          recognizer: recognizer,
+        ));
+        if (trailing.isNotEmpty) spans.add(TextSpan(text: trailing));
+      } else {
+        final uname = mention!.substring(1);
+        final isMe = widget.myUsername != null &&
+            uname.toLowerCase() == widget.myUsername!.toLowerCase();
+        spans.add(TextSpan(
+          text: mention,
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: linkColor,
+            backgroundColor: isMe
+                ? (widget.isMine
+                    ? Colors.white.withValues(alpha: 0.22)
+                    : widget.primary.withValues(alpha: 0.14))
+                : null,
+          ),
+        ));
+      }
+      last = m.end;
+    }
+
+    if (last == 0) return Text(text, style: widget.style);
+    if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+    return Text.rich(TextSpan(style: widget.style, children: spans));
+  }
+}
+
 class _Bubble extends StatelessWidget {
 
   const _Bubble({
@@ -2693,6 +2981,7 @@ class _Bubble extends StatelessWidget {
     this.showSender = false,
     this.mentionUsernames = const {},
     this.myUsername,
+    this.onOpenLink,
     this.uploadProgress,
     this.highlighted = false,
     this.reactions = const [],
@@ -2715,6 +3004,9 @@ class _Bubble extends StatelessWidget {
 
   /// My own username, so a mention of me can be emphasised.
   final String? myUsername;
+
+  /// Tapping a URL in the body invokes this (in-app join / open in browser).
+  final void Function(String url)? onOpenLink;
 
   /// Active upload progress (0..1) for an outgoing media message, or null.
   final double? uploadProgress;
@@ -2905,41 +3197,18 @@ class _Bubble extends StatelessWidget {
     );
   }
 
-  /// Plain text, but with `@username` tokens that match a real group member
-  /// rendered bold/coloured (mentions of me get a subtle highlight).
+  /// Plain text, but with tappable URLs and `@username` mentions (matching a
+  /// real group member) rendered bold/coloured.
   Widget _bodyText(String text, Color onColor) {
-    final base = TextStyle(color: onColor, height: 1.35);
-    if (mentionUsernames.isEmpty || !text.contains('@')) {
-      return Text(text, style: base);
-    }
-    final re = RegExp(r'@([A-Za-z0-9_]+)');
-    final spans = <InlineSpan>[];
-    var last = 0;
-    for (final mch in re.allMatches(text)) {
-      final uname = mch.group(1)!;
-      if (!mentionUsernames.contains(uname)) continue;
-      if (mch.start > last) {
-        spans.add(TextSpan(text: text.substring(last, mch.start)));
-      }
-      final isMe =
-          myUsername != null && uname.toLowerCase() == myUsername!.toLowerCase();
-      spans.add(TextSpan(
-        text: '@$uname',
-        style: TextStyle(
-          fontWeight: FontWeight.w700,
-          color: message.isMine ? Colors.white : primary,
-          backgroundColor: isMe
-              ? (message.isMine
-                  ? Colors.white.withValues(alpha: 0.22)
-                  : primary.withValues(alpha: 0.14))
-              : null,
-        ),
-      ));
-      last = mch.end;
-    }
-    if (last == 0) return Text(text, style: base);
-    if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
-    return Text.rich(TextSpan(style: base, children: spans));
+    return _LinkableText(
+      text: text,
+      style: TextStyle(color: onColor, height: 1.35),
+      isMine: message.isMine,
+      primary: primary,
+      mentionUsernames: mentionUsernames,
+      myUsername: myUsername,
+      onOpenLink: onOpenLink,
+    );
   }
 
   Widget _quoteBlock(BuildContext context, Color onColor) {

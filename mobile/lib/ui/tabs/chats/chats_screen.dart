@@ -8,11 +8,13 @@ import 'package:intl/intl.dart';
 import '../../../core/auth/session_provider.dart';
 import '../../../core/chat/chat_models.dart';
 import '../../../core/chat/chat_repository.dart';
+import '../../../core/chat/group_repository.dart';
 import '../../../core/db/message_store.dart';
 import '../../../core/realtime/chat_realtime_service.dart';
 import '../../chats/chat_thread_screen.dart';
 import '../../chats/create_group_screen.dart';
 import '../../chats/group_avatar.dart';
+import '../../chats/group_invite.dart';
 import '../../chats/new_chat_screen.dart';
 
 class ChatsScreen extends ConsumerStatefulWidget {
@@ -94,6 +96,102 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     return _inFlight!;
   }
 
+  Future<void> _joinViaLink() async {
+    final controller = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Join via link'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Paste a group invite link to join.'),
+            const Gap(12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Invite link',
+                hintText: 'https://auratalk.app/join/...',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (raw == null) return;
+    final token = parseInviteToken(raw);
+    if (token == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('That doesn\'t look like a valid invite link')),
+        );
+      }
+      return;
+    }
+
+    final repo = ref.read(groupRepositoryProvider);
+    GroupInvitePreview preview;
+    try {
+      preview = await repo.previewInvite(token);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invite link is invalid or expired')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+
+    if (!preview.alreadyMember) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(preview.title),
+          content: Text('${preview.memberCount} members · Join this group?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Join')),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+      try {
+        await repo.joinByInvite(token);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not join the group')),
+          );
+        }
+        return;
+      }
+    }
+
+    await _load(silent: true);
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatThreadScreen(
+          conversationId: preview.conversationId,
+          title: preview.title,
+          groupId: preview.groupId,
+          isGroup: true,
+        ),
+      ),
+    );
+    await _load(silent: true);
+  }
+
   Future<void> _doLoad({bool silent = false}) async {
     if (!silent) {
       setState(() {
@@ -163,6 +261,21 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
             )
           else
             IconButton(onPressed: () => _load(silent: _conversations.isNotEmpty), icon: const Icon(Icons.refresh)),
+          PopupMenuButton<String>(
+            onSelected: (v) {
+              if (v == 'join') _joinViaLink();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'join',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.link),
+                  title: Text('Join via link'),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(width: 6),
         ],
       ),

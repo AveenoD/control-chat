@@ -35,6 +35,53 @@ class GroupSummary {
   final DateTime createdAt;
 }
 
+class GroupInvitePreview {
+  const GroupInvitePreview({
+    required this.groupId,
+    required this.conversationId,
+    required this.title,
+    required this.memberCount,
+    required this.alreadyMember,
+    this.avatarBlobId,
+    this.avatarKey,
+  });
+
+  final String groupId;
+  final String conversationId;
+  final String title;
+  final int memberCount;
+  final bool alreadyMember;
+  final String? avatarBlobId;
+  final String? avatarKey;
+}
+
+class SeenReader {
+  const SeenReader({
+    required this.userId,
+    this.username,
+    this.displayName,
+    this.readAt,
+  });
+
+  final String userId;
+  final String? username;
+  final String? displayName;
+  final DateTime? readAt;
+
+  String get label => (displayName?.isNotEmpty ?? false)
+      ? displayName!
+      : (username != null ? '@$username' : 'User');
+
+  factory SeenReader.fromJson(Map<String, dynamic> j) => SeenReader(
+        userId: j['user_id'] as String,
+        username: j['username'] as String?,
+        displayName: j['display_name'] as String?,
+        readAt: j['read_at'] != null
+            ? DateTime.tryParse(j['read_at'] as String)
+            : null,
+      );
+}
+
 class GroupMember {
   const GroupMember({
     required this.userId,
@@ -193,6 +240,8 @@ class GroupRepository {
     switch (type) {
       case 'member_added':
         return '$actor added $target';
+      case 'member_joined':
+        return '$actor joined via invite link';
       case 'member_removed':
         return '$actor removed $target';
       case 'member_left':
@@ -322,6 +371,55 @@ class GroupRepository {
     await _dio.post('/groups/$groupId/members/$userId/role', data: {'role': role});
   }
 
+  /// Admin-only: fetch (reuse) the group's shareable invite token.
+  Future<String> createInvite(String groupId) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/groups/$groupId/invite',
+      data: const <String, dynamic>{},
+    );
+    return res.data!['token'] as String;
+  }
+
+  /// Admin-only: revoke all active invite tokens (existing links stop working).
+  Future<void> revokeInvite(String groupId) async {
+    await _dio.post('/groups/$groupId/invite/revoke', data: const <String, dynamic>{});
+  }
+
+  /// Preview a group from an invite token before joining.
+  Future<GroupInvitePreview> previewInvite(String token) async {
+    final res = await _dio.get<Map<String, dynamic>>('/groups/invite/$token');
+    final g = res.data!['group'] as Map<String, dynamic>;
+    return GroupInvitePreview(
+      groupId: g['id'] as String,
+      conversationId: g['conversation_id'] as String,
+      title: g['title'] as String,
+      memberCount: (g['member_count'] as num?)?.toInt() ?? 0,
+      avatarBlobId: g['avatar_blob_id'] as String?,
+      avatarKey: g['avatar_key'] as String?,
+      alreadyMember: (res.data!['alreadyMember'] as bool?) ?? false,
+    );
+  }
+
+  /// Join a group via an invite token. Returns the conversation id.
+  Future<String> joinByInvite(String token) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/groups/invite/$token/join',
+      data: const <String, dynamic>{},
+    );
+    return res.data!['conversationId'] as String;
+  }
+
+  /// Sender-only: which members have read [messageId] (group "Seen by N").
+  Future<List<SeenReader>> messageSeenBy(String groupId, String messageId) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/groups/$groupId/messages/$messageId/seen',
+    );
+    final rows = (res.data!['readers'] as List<dynamic>?) ?? const [];
+    return rows
+        .map((r) => SeenReader.fromJson(r as Map<String, dynamic>))
+        .toList();
+  }
+
   /// Admin-only: delete the group for everyone.
   Future<void> deleteGroup(String groupId) async {
     await _dio.delete('/groups/$groupId', data: const <String, dynamic>{});
@@ -365,8 +463,8 @@ class GroupRepository {
   /// to every member device — including members whose device joined later or was
   /// reinstalled and therefore never received an envelope. Members who don't
   /// hold the key simply no-op. Best-effort; safe to call on every thread open.
-  Future<void> ensureKeyDistributed(String groupId) async {
-    if (_redistributed.contains(groupId)) return;
+  Future<void> ensureKeyDistributed(String groupId, {bool force = false}) async {
+    if (!force && _redistributed.contains(groupId)) return;
     final int epoch;
     try {
       epoch = await currentEpoch(groupId);

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 import 'package:image_picker/image_picker.dart' show ImageSource;
+
+import 'group_invite.dart';
 
 import '../../core/auth/session_provider.dart';
 import '../../core/chat/chat_models.dart';
@@ -140,6 +143,100 @@ class _GroupInfoScreenState extends ConsumerState<GroupInfoScreen> {
       await _load();
     } catch (e) {
       _snack('Could not rename group');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _inviteLink() async {
+    setState(() => _busy = true);
+    String token;
+    try {
+      token = await ref.read(groupRepositoryProvider).createInvite(widget.groupId);
+    } catch (e) {
+      _snack('Could not create invite link');
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
+    if (mounted) setState(() => _busy = false);
+    if (!mounted) return;
+
+    final link = groupInviteLink(token);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.link, color: Theme.of(ctx).colorScheme.primary),
+                  const Gap(10),
+                  const Text('Group invite link',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                ],
+              ),
+              const Gap(6),
+              Text('Anyone with this link can join the group.',
+                  style: Theme.of(ctx).textTheme.bodySmall),
+              const Gap(16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0F2F5),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: SelectableText(link,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              const Gap(16),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: link));
+                        Navigator.of(ctx).pop();
+                        _snack('Invite link copied');
+                      },
+                      icon: const Icon(Icons.copy),
+                      label: const Text('Copy link'),
+                    ),
+                  ),
+                ],
+              ),
+              const Gap(4),
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  _revokeInvite();
+                },
+                icon: Icon(Icons.link_off, color: Theme.of(ctx).colorScheme.error),
+                label: Text('Reset link',
+                    style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _revokeInvite() async {
+    final ok = await _confirm('Reset invite link?',
+        'The current link will stop working. You can generate a new one anytime.');
+    if (!ok) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(groupRepositoryProvider).revokeInvite(widget.groupId);
+      _snack('Invite link reset');
+    } catch (e) {
+      _snack('Could not reset link');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -449,6 +546,13 @@ class _GroupInfoScreenState extends ConsumerState<GroupInfoScreen> {
                             leading: const Icon(Icons.person_add_alt_1),
                             title: const Text('Add members'),
                             onTap: _busy ? null : _addMembers,
+                          ),
+                        if (amAdmin)
+                          ListTile(
+                            leading: const Icon(Icons.link),
+                            title: const Text('Invite via link'),
+                            subtitle: const Text('Anyone with the link can join'),
+                            onTap: _busy ? null : _inviteLink,
                           ),
                         const Padding(
                           padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
