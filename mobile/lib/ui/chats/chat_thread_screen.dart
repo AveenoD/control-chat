@@ -131,6 +131,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
   String? _groupAvatarBlobId;
   String? _groupAvatarKey;
 
+  /// Group members (for @mention suggestions + bubble highlighting).
+  List<GroupMember> _groupMembers = const [];
+  Set<String> _memberUsernames = const {};
+  String? _myUsername;
+
+  /// Live @mention autocomplete state while composing.
+  List<GroupMember> _mentionSuggestions = const [];
+  int _mentionTokenStart = -1;
+
   Timer? _typingDebounce;
 
   Timer? _typingClearTimer;
@@ -229,6 +238,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     }
 
     _loadPrivacy();
+    _myUsername = ref.read(sessionProvider).profile?.username;
 
     // UI is a projection of the local DB → cached messages render instantly
     // (offline-capable). The network sync below just writes into that DB.
@@ -289,6 +299,21 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           isMine: false,
         ));
         return;
+      }
+    } catch (_) {}
+
+    // Load members for @mention autocomplete + bubble highlighting.
+    try {
+      final members = await groups.listMembers(gid);
+      if (mounted) {
+        setState(() {
+          _groupMembers = members;
+          _memberUsernames = members
+              .map((m) => m.username)
+              .whereType<String>()
+              .where((u) => u.isNotEmpty)
+              .toSet();
+        });
       }
     } catch (_) {}
 
@@ -380,6 +405,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
         if (!has) _viewOnceNext = false;
       });
     }
+    _updateMentionSuggestions();
     if (!_typingEnabled || _conversationId == null) return;
     final typing = _input.text.trim().isNotEmpty;
     _typingDebounce?.cancel();
@@ -400,6 +426,81 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       _typingKeepAlive?.cancel();
       ref.read(chatRepositoryProvider).sendTyping(conversationId: _conversationId!, isTyping: false).catchError((_) {});
     }
+  }
+
+  void _clearMentionSuggestions() {
+    if (_mentionSuggestions.isEmpty && _mentionTokenStart < 0) return;
+    setState(() {
+      _mentionSuggestions = const [];
+      _mentionTokenStart = -1;
+    });
+  }
+
+  /// Detects the `@token` being typed at the caret (groups only) and surfaces
+  /// matching members. The token must start at a word boundary so mid-word `@`
+  /// (e.g. an email) doesn't trigger the picker.
+  void _updateMentionSuggestions() {
+    if (!_isGroup || _groupMembers.isEmpty) {
+      _clearMentionSuggestions();
+      return;
+    }
+    final sel = _input.selection;
+    final text = _input.text;
+    if (!sel.isValid || sel.start != sel.end) {
+      _clearMentionSuggestions();
+      return;
+    }
+    final caret = sel.start;
+    var i = caret - 1;
+    while (i >= 0 && text[i] != ' ' && text[i] != '\n') {
+      i--;
+    }
+    final tokenStart = i + 1;
+    if (tokenStart >= caret || text[tokenStart] != '@') {
+      _clearMentionSuggestions();
+      return;
+    }
+    final query = text.substring(tokenStart + 1, caret).toLowerCase();
+    // A space inside the token means the mention is already finished.
+    if (query.contains(' ')) {
+      _clearMentionSuggestions();
+      return;
+    }
+    final myId = ref.read(sessionProvider).userId;
+    final matches = _groupMembers.where((m) {
+      if (m.userId == myId) return false;
+      final uname = m.username;
+      if (uname == null || uname.isEmpty) return false;
+      if (query.isEmpty) return true;
+      return uname.toLowerCase().contains(query) ||
+          (m.displayName?.toLowerCase().contains(query) ?? false);
+    }).take(6).toList();
+    setState(() {
+      _mentionSuggestions = matches;
+      _mentionTokenStart = matches.isEmpty ? -1 : tokenStart;
+    });
+  }
+
+  void _applyMention(GroupMember m) {
+    final uname = m.username;
+    if (uname == null || _mentionTokenStart < 0) {
+      _clearMentionSuggestions();
+      return;
+    }
+    final text = _input.text;
+    final caret = _input.selection.end;
+    final start = _mentionTokenStart;
+    if (start > text.length || caret > text.length || start > caret) {
+      _clearMentionSuggestions();
+      return;
+    }
+    final replacement = '@$uname ';
+    final newText = text.replaceRange(start, caret, replacement);
+    _input.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + replacement.length),
+    );
+    _clearMentionSuggestions();
   }
 
   void _scrollToBottom({bool animated = true}) {
@@ -1772,6 +1873,53 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
+  Widget _mentionPicker(Color primary) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+      constraints: const BoxConstraints(maxHeight: 216),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Theme.of(context).dividerColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: _mentionSuggestions.length,
+        itemBuilder: (context, i) {
+          final m = _mentionSuggestions[i];
+          final name = (m.displayName?.isNotEmpty ?? false)
+              ? m.displayName!
+              : (m.username ?? 'User');
+          return ListTile(
+            dense: true,
+            leading: CircleAvatar(
+              radius: 16,
+              backgroundColor: primary.withValues(alpha: 0.12),
+              child: Text(
+                name.isNotEmpty ? name[0].toUpperCase() : '?',
+                style: TextStyle(color: primary, fontWeight: FontWeight.w700),
+              ),
+            ),
+            title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: m.username != null
+                ? Text('@${m.username}',
+                    maxLines: 1, overflow: TextOverflow.ellipsis)
+                : null,
+            onTap: () => _applyMention(m),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _recordingBar(Color primary) {
     return Row(
       children: [
@@ -2269,6 +2417,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
                                     message: m,
                                     primary: primary,
                                     showSender: _isGroup && !m.isMine,
+                                    mentionUsernames: _memberUsernames,
+                                    myUsername: _myUsername,
                                     uploadProgress: progress,
                                     highlighted: _highlightedId != null && m.id == _highlightedId,
                                     reactions: _reactions[m.id] ?? const [],
@@ -2400,6 +2550,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
                 ],
               ),
             ),
+
+          if (_mentionSuggestions.isNotEmpty) _mentionPicker(primary),
 
           SafeArea(
 
@@ -2539,6 +2691,8 @@ class _Bubble extends StatelessWidget {
     required this.message,
     required this.primary,
     this.showSender = false,
+    this.mentionUsernames = const {},
+    this.myUsername,
     this.uploadProgress,
     this.highlighted = false,
     this.reactions = const [],
@@ -2555,6 +2709,12 @@ class _Bubble extends StatelessWidget {
   final Color primary;
 
   final bool showSender;
+
+  /// Group member usernames used to highlight `@mentions` in the body.
+  final Set<String> mentionUsernames;
+
+  /// My own username, so a mention of me can be emphasised.
+  final String? myUsername;
 
   /// Active upload progress (0..1) for an outgoing media message, or null.
   final double? uploadProgress;
@@ -2738,12 +2898,48 @@ class _Bubble extends StatelessWidget {
         if (message.isMedia && message.text.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text(message.text, style: TextStyle(color: onColor, height: 1.35)),
+            child: _bodyText(message.text, onColor),
           ),
-        if (!message.isMedia)
-          Text(message.text, style: TextStyle(color: onColor, height: 1.35)),
+        if (!message.isMedia) _bodyText(message.text, onColor),
       ],
     );
+  }
+
+  /// Plain text, but with `@username` tokens that match a real group member
+  /// rendered bold/coloured (mentions of me get a subtle highlight).
+  Widget _bodyText(String text, Color onColor) {
+    final base = TextStyle(color: onColor, height: 1.35);
+    if (mentionUsernames.isEmpty || !text.contains('@')) {
+      return Text(text, style: base);
+    }
+    final re = RegExp(r'@([A-Za-z0-9_]+)');
+    final spans = <InlineSpan>[];
+    var last = 0;
+    for (final mch in re.allMatches(text)) {
+      final uname = mch.group(1)!;
+      if (!mentionUsernames.contains(uname)) continue;
+      if (mch.start > last) {
+        spans.add(TextSpan(text: text.substring(last, mch.start)));
+      }
+      final isMe =
+          myUsername != null && uname.toLowerCase() == myUsername!.toLowerCase();
+      spans.add(TextSpan(
+        text: '@$uname',
+        style: TextStyle(
+          fontWeight: FontWeight.w700,
+          color: message.isMine ? Colors.white : primary,
+          backgroundColor: isMe
+              ? (message.isMine
+                  ? Colors.white.withValues(alpha: 0.22)
+                  : primary.withValues(alpha: 0.14))
+              : null,
+        ),
+      ));
+      last = mch.end;
+    }
+    if (last == 0) return Text(text, style: base);
+    if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+    return Text.rich(TextSpan(style: base, children: spans));
   }
 
   Widget _quoteBlock(BuildContext context, Color onColor) {
