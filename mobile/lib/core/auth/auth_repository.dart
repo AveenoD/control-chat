@@ -10,6 +10,30 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return AuthRepository(ref.watch(dioProvider));
 });
 
+class LegalDocument {
+  const LegalDocument({
+    required this.type,
+    required this.version,
+    required this.title,
+    required this.updated,
+    required this.content,
+  });
+
+  final String type;
+  final String version;
+  final String title;
+  final String updated;
+  final String content;
+
+  factory LegalDocument.fromJson(Map<String, dynamic> j) => LegalDocument(
+        type: j['type'] as String? ?? '',
+        version: j['version'] as String? ?? '',
+        title: j['title'] as String? ?? 'Document',
+        updated: j['updated'] as String? ?? '',
+        content: j['content'] as String? ?? '',
+      );
+}
+
 class AuthRepository {
   AuthRepository(this._dio);
 
@@ -77,6 +101,23 @@ class AuthRepository {
       '/users/username/${username.toLowerCase()}/available',
     );
     return res.data!['available'] as bool? ?? false;
+  }
+
+  /// Fetch a legal document ('tos' or 'privacy') for display.
+  Future<LegalDocument> fetchLegalDocument(String type) async {
+    final res = await _dio.get<Map<String, dynamic>>('/legal/$type');
+    return LegalDocument.fromJson(res.data!['document'] as Map<String, dynamic>);
+  }
+
+  /// Record the user's acceptance of the current document versions.
+  Future<void> acceptConsent({
+    required String tosVersion,
+    required String privacyVersion,
+  }) async {
+    await _dio.post('/legal/consent', data: {
+      'tosVersion': tosVersion,
+      'privacyVersion': privacyVersion,
+    });
   }
 
   Future<Map<String, dynamic>> getPrivacy() async {

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 
 import '../../core/auth/session_provider.dart';
+import '../legal/consent_screen.dart';
 import '../onboarding/onboarding_screen.dart';
 import '../shell/app_shell.dart';
 import 'phone_login_screen.dart';
@@ -27,6 +28,10 @@ class AppGate extends ConsumerWidget {
 
     if (session.needsOnboarding) {
       return const OnboardingScreen();
+    }
+
+    if (session.needsConsent) {
+      return const ConsentScreen();
     }
 
     return const AppShell();

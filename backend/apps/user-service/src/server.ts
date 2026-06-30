@@ -9,6 +9,8 @@ import { loadUserConfig } from "./config.js";
 import { createDb } from "./db.js";
 import { registerPhase2Routes } from "./phase2-routes.js";
 import { registerPhase3Routes } from "./phase3-routes.js";
+import { registerLegalRoutes, hasCurrentConsent } from "./legal-routes.js";
+import { TOS_VERSION, PRIVACY_VERSION } from "./legal.js";
 
 const cfg = loadUserConfig();
 const logger = createLogger(cfg);
@@ -47,15 +49,20 @@ app.get("/me", async (req) => {
   );
   const row = res.rows[0];
   if (!row) return { ok: false, error: "Not found" };
+  const consentRequired = !(await hasCurrentConsent(db, userId));
   return {
     ok: true,
     user: {
       ...row,
-      onboardingComplete: row.onboarding_completed_at != null && row.username != null
+      onboardingComplete: row.onboarding_completed_at != null && row.username != null,
+      consentRequired,
+      tosVersion: TOS_VERSION,
+      privacyVersion: PRIVACY_VERSION
     }
   };
 });
 
+registerLegalRoutes(app, db);
 registerPhase2Routes(app, db, { centrifugoTokenSecret: cfg.CENTRIFUGO_TOKEN_SECRET });
 registerPhase3Routes(app, db, {
   livekitApiKey: cfg.LIVEKIT_API_KEY,

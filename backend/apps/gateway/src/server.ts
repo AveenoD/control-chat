@@ -85,6 +85,12 @@ await app.register(httpProxy, {
 });
 await app.register(httpProxy, {
   upstream: env.USER_SERVICE_URL,
+  prefix: "/legal",
+  rewritePrefix: "/legal",
+  replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }
+});
+await app.register(httpProxy, {
+  upstream: env.USER_SERVICE_URL,
   prefix: "/blocks",
   rewritePrefix: "/blocks",
   replyOptions: { rewriteRequestHeaders: stripUnsupportedHeaders }

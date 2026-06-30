@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 
 import '../../../core/auth/session_provider.dart';
+import '../../legal/legal_document_screen.dart';
 import '../../privacy/privacy_settings_screen.dart';
 import '../../requests/message_requests_screen.dart';
 
@@ -74,10 +75,31 @@ class ProfileScreen extends ConsumerWidget {
           ),
           const Gap(10),
           _SettingRow(
-            icon: Icons.info_outline,
-            title: 'About',
-            subtitle: 'Version, terms, support',
-            onTap: () {},
+            icon: Icons.description_outlined,
+            title: 'Terms of Service',
+            subtitle: 'How you may use AuraTalk',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const LegalDocumentScreen(
+                  type: 'tos',
+                  fallbackTitle: 'Terms of Service',
+                ),
+              ),
+            ),
+          ),
+          const Gap(10),
+          _SettingRow(
+            icon: Icons.privacy_tip_outlined,
+            title: 'Privacy Policy',
+            subtitle: 'What we collect and how it\u2019s used',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const LegalDocumentScreen(
+                  type: 'privacy',
+                  fallbackTitle: 'Privacy Policy',
+                ),
+              ),
+            ),
           ),
           const Gap(24),
           OutlinedButton(

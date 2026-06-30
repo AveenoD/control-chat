@@ -237,6 +237,17 @@ class SessionNotifier extends Notifier<AuthSession> {
     state = state.copyWith(profile: profile);
   }
 
+  /// Record acceptance of the latest legal documents, then refresh the profile
+  /// so the gate advances past the consent screen.
+  Future<void> acceptConsent() async {
+    final p = state.profile;
+    await ref.read(authRepositoryProvider).acceptConsent(
+          tosVersion: p?.tosVersion ?? '',
+          privacyVersion: p?.privacyVersion ?? '',
+        );
+    await refreshProfile();
+  }
+
   Future<void> logout() async {
     // Keep the device's E2EE identity key + deviceId across logout so the
     // same device can still decrypt its message history on re-login (WhatsApp
