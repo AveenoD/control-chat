@@ -316,6 +316,50 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _replyToIdMeta = const VerificationMeta(
+    'replyToId',
+  );
+  @override
+  late final GeneratedColumn<String> replyToId = GeneratedColumn<String>(
+    'reply_to_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _replySenderMeta = const VerificationMeta(
+    'replySender',
+  );
+  @override
+  late final GeneratedColumn<String> replySender = GeneratedColumn<String>(
+    'reply_sender',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _replyPreviewMeta = const VerificationMeta(
+    'replyPreview',
+  );
+  @override
+  late final GeneratedColumn<String> replyPreview = GeneratedColumn<String>(
+    'reply_preview',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _replyMediaTypeMeta = const VerificationMeta(
+    'replyMediaType',
+  );
+  @override
+  late final GeneratedColumn<String> replyMediaType = GeneratedColumn<String>(
+    'reply_media_type',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localId,
@@ -344,6 +388,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     mediaSize,
     mediaDurationMs,
     mediaWaveform,
+    replyToId,
+    replySender,
+    replyPreview,
+    replyMediaType,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -554,6 +602,39 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         ),
       );
     }
+    if (data.containsKey('reply_to_id')) {
+      context.handle(
+        _replyToIdMeta,
+        replyToId.isAcceptableOrUnknown(data['reply_to_id']!, _replyToIdMeta),
+      );
+    }
+    if (data.containsKey('reply_sender')) {
+      context.handle(
+        _replySenderMeta,
+        replySender.isAcceptableOrUnknown(
+          data['reply_sender']!,
+          _replySenderMeta,
+        ),
+      );
+    }
+    if (data.containsKey('reply_preview')) {
+      context.handle(
+        _replyPreviewMeta,
+        replyPreview.isAcceptableOrUnknown(
+          data['reply_preview']!,
+          _replyPreviewMeta,
+        ),
+      );
+    }
+    if (data.containsKey('reply_media_type')) {
+      context.handle(
+        _replyMediaTypeMeta,
+        replyMediaType.isAcceptableOrUnknown(
+          data['reply_media_type']!,
+          _replyMediaTypeMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -667,6 +748,22 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.string,
         data['${effectivePrefix}media_waveform'],
       ),
+      replyToId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reply_to_id'],
+      ),
+      replySender: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reply_sender'],
+      ),
+      replyPreview: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reply_preview'],
+      ),
+      replyMediaType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reply_media_type'],
+      ),
     );
   }
 
@@ -725,6 +822,13 @@ class Message extends DataClass implements Insertable<Message> {
   /// Voice-note duration (ms) and comma-separated waveform bars (0–100).
   final int? mediaDurationMs;
   final String? mediaWaveform;
+
+  /// Reply/quote: id of the referenced message + a cached preview so the quote
+  /// renders even if the original isn't stored locally.
+  final String? replyToId;
+  final String? replySender;
+  final String? replyPreview;
+  final String? replyMediaType;
   const Message({
     required this.localId,
     this.serverId,
@@ -752,6 +856,10 @@ class Message extends DataClass implements Insertable<Message> {
     this.mediaSize,
     this.mediaDurationMs,
     this.mediaWaveform,
+    this.replyToId,
+    this.replySender,
+    this.replyPreview,
+    this.replyMediaType,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -811,6 +919,18 @@ class Message extends DataClass implements Insertable<Message> {
     }
     if (!nullToAbsent || mediaWaveform != null) {
       map['media_waveform'] = Variable<String>(mediaWaveform);
+    }
+    if (!nullToAbsent || replyToId != null) {
+      map['reply_to_id'] = Variable<String>(replyToId);
+    }
+    if (!nullToAbsent || replySender != null) {
+      map['reply_sender'] = Variable<String>(replySender);
+    }
+    if (!nullToAbsent || replyPreview != null) {
+      map['reply_preview'] = Variable<String>(replyPreview);
+    }
+    if (!nullToAbsent || replyMediaType != null) {
+      map['reply_media_type'] = Variable<String>(replyMediaType);
     }
     return map;
   }
@@ -873,6 +993,18 @@ class Message extends DataClass implements Insertable<Message> {
       mediaWaveform: mediaWaveform == null && nullToAbsent
           ? const Value.absent()
           : Value(mediaWaveform),
+      replyToId: replyToId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replyToId),
+      replySender: replySender == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replySender),
+      replyPreview: replyPreview == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replyPreview),
+      replyMediaType: replyMediaType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replyMediaType),
     );
   }
 
@@ -908,6 +1040,10 @@ class Message extends DataClass implements Insertable<Message> {
       mediaSize: serializer.fromJson<int?>(json['mediaSize']),
       mediaDurationMs: serializer.fromJson<int?>(json['mediaDurationMs']),
       mediaWaveform: serializer.fromJson<String?>(json['mediaWaveform']),
+      replyToId: serializer.fromJson<String?>(json['replyToId']),
+      replySender: serializer.fromJson<String?>(json['replySender']),
+      replyPreview: serializer.fromJson<String?>(json['replyPreview']),
+      replyMediaType: serializer.fromJson<String?>(json['replyMediaType']),
     );
   }
   @override
@@ -940,6 +1076,10 @@ class Message extends DataClass implements Insertable<Message> {
       'mediaSize': serializer.toJson<int?>(mediaSize),
       'mediaDurationMs': serializer.toJson<int?>(mediaDurationMs),
       'mediaWaveform': serializer.toJson<String?>(mediaWaveform),
+      'replyToId': serializer.toJson<String?>(replyToId),
+      'replySender': serializer.toJson<String?>(replySender),
+      'replyPreview': serializer.toJson<String?>(replyPreview),
+      'replyMediaType': serializer.toJson<String?>(replyMediaType),
     };
   }
 
@@ -970,6 +1110,10 @@ class Message extends DataClass implements Insertable<Message> {
     Value<int?> mediaSize = const Value.absent(),
     Value<int?> mediaDurationMs = const Value.absent(),
     Value<String?> mediaWaveform = const Value.absent(),
+    Value<String?> replyToId = const Value.absent(),
+    Value<String?> replySender = const Value.absent(),
+    Value<String?> replyPreview = const Value.absent(),
+    Value<String?> replyMediaType = const Value.absent(),
   }) => Message(
     localId: localId ?? this.localId,
     serverId: serverId.present ? serverId.value : this.serverId,
@@ -1007,6 +1151,12 @@ class Message extends DataClass implements Insertable<Message> {
     mediaWaveform: mediaWaveform.present
         ? mediaWaveform.value
         : this.mediaWaveform,
+    replyToId: replyToId.present ? replyToId.value : this.replyToId,
+    replySender: replySender.present ? replySender.value : this.replySender,
+    replyPreview: replyPreview.present ? replyPreview.value : this.replyPreview,
+    replyMediaType: replyMediaType.present
+        ? replyMediaType.value
+        : this.replyMediaType,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -1062,6 +1212,16 @@ class Message extends DataClass implements Insertable<Message> {
       mediaWaveform: data.mediaWaveform.present
           ? data.mediaWaveform.value
           : this.mediaWaveform,
+      replyToId: data.replyToId.present ? data.replyToId.value : this.replyToId,
+      replySender: data.replySender.present
+          ? data.replySender.value
+          : this.replySender,
+      replyPreview: data.replyPreview.present
+          ? data.replyPreview.value
+          : this.replyPreview,
+      replyMediaType: data.replyMediaType.present
+          ? data.replyMediaType.value
+          : this.replyMediaType,
     );
   }
 
@@ -1093,7 +1253,11 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('mediaFilename: $mediaFilename, ')
           ..write('mediaSize: $mediaSize, ')
           ..write('mediaDurationMs: $mediaDurationMs, ')
-          ..write('mediaWaveform: $mediaWaveform')
+          ..write('mediaWaveform: $mediaWaveform, ')
+          ..write('replyToId: $replyToId, ')
+          ..write('replySender: $replySender, ')
+          ..write('replyPreview: $replyPreview, ')
+          ..write('replyMediaType: $replyMediaType')
           ..write(')'))
         .toString();
   }
@@ -1126,6 +1290,10 @@ class Message extends DataClass implements Insertable<Message> {
     mediaSize,
     mediaDurationMs,
     mediaWaveform,
+    replyToId,
+    replySender,
+    replyPreview,
+    replyMediaType,
   ]);
   @override
   bool operator ==(Object other) =>
@@ -1156,7 +1324,11 @@ class Message extends DataClass implements Insertable<Message> {
           other.mediaFilename == this.mediaFilename &&
           other.mediaSize == this.mediaSize &&
           other.mediaDurationMs == this.mediaDurationMs &&
-          other.mediaWaveform == this.mediaWaveform);
+          other.mediaWaveform == this.mediaWaveform &&
+          other.replyToId == this.replyToId &&
+          other.replySender == this.replySender &&
+          other.replyPreview == this.replyPreview &&
+          other.replyMediaType == this.replyMediaType);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -1186,6 +1358,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int?> mediaSize;
   final Value<int?> mediaDurationMs;
   final Value<String?> mediaWaveform;
+  final Value<String?> replyToId;
+  final Value<String?> replySender;
+  final Value<String?> replyPreview;
+  final Value<String?> replyMediaType;
   const MessagesCompanion({
     this.localId = const Value.absent(),
     this.serverId = const Value.absent(),
@@ -1213,6 +1389,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.mediaSize = const Value.absent(),
     this.mediaDurationMs = const Value.absent(),
     this.mediaWaveform = const Value.absent(),
+    this.replyToId = const Value.absent(),
+    this.replySender = const Value.absent(),
+    this.replyPreview = const Value.absent(),
+    this.replyMediaType = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.localId = const Value.absent(),
@@ -1241,6 +1421,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.mediaSize = const Value.absent(),
     this.mediaDurationMs = const Value.absent(),
     this.mediaWaveform = const Value.absent(),
+    this.replyToId = const Value.absent(),
+    this.replySender = const Value.absent(),
+    this.replyPreview = const Value.absent(),
+    this.replyMediaType = const Value.absent(),
   }) : conversationId = Value(conversationId),
        senderUserId = Value(senderUserId),
        body = Value(body),
@@ -1272,6 +1456,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? mediaSize,
     Expression<int>? mediaDurationMs,
     Expression<String>? mediaWaveform,
+    Expression<String>? replyToId,
+    Expression<String>? replySender,
+    Expression<String>? replyPreview,
+    Expression<String>? replyMediaType,
   }) {
     return RawValuesInsertable({
       if (localId != null) 'local_id': localId,
@@ -1300,6 +1488,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (mediaSize != null) 'media_size': mediaSize,
       if (mediaDurationMs != null) 'media_duration_ms': mediaDurationMs,
       if (mediaWaveform != null) 'media_waveform': mediaWaveform,
+      if (replyToId != null) 'reply_to_id': replyToId,
+      if (replySender != null) 'reply_sender': replySender,
+      if (replyPreview != null) 'reply_preview': replyPreview,
+      if (replyMediaType != null) 'reply_media_type': replyMediaType,
     });
   }
 
@@ -1330,6 +1522,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int?>? mediaSize,
     Value<int?>? mediaDurationMs,
     Value<String?>? mediaWaveform,
+    Value<String?>? replyToId,
+    Value<String?>? replySender,
+    Value<String?>? replyPreview,
+    Value<String?>? replyMediaType,
   }) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -1358,6 +1554,10 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       mediaSize: mediaSize ?? this.mediaSize,
       mediaDurationMs: mediaDurationMs ?? this.mediaDurationMs,
       mediaWaveform: mediaWaveform ?? this.mediaWaveform,
+      replyToId: replyToId ?? this.replyToId,
+      replySender: replySender ?? this.replySender,
+      replyPreview: replyPreview ?? this.replyPreview,
+      replyMediaType: replyMediaType ?? this.replyMediaType,
     );
   }
 
@@ -1442,6 +1642,18 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (mediaWaveform.present) {
       map['media_waveform'] = Variable<String>(mediaWaveform.value);
     }
+    if (replyToId.present) {
+      map['reply_to_id'] = Variable<String>(replyToId.value);
+    }
+    if (replySender.present) {
+      map['reply_sender'] = Variable<String>(replySender.value);
+    }
+    if (replyPreview.present) {
+      map['reply_preview'] = Variable<String>(replyPreview.value);
+    }
+    if (replyMediaType.present) {
+      map['reply_media_type'] = Variable<String>(replyMediaType.value);
+    }
     return map;
   }
 
@@ -1473,7 +1685,11 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('mediaFilename: $mediaFilename, ')
           ..write('mediaSize: $mediaSize, ')
           ..write('mediaDurationMs: $mediaDurationMs, ')
-          ..write('mediaWaveform: $mediaWaveform')
+          ..write('mediaWaveform: $mediaWaveform, ')
+          ..write('replyToId: $replyToId, ')
+          ..write('replySender: $replySender, ')
+          ..write('replyPreview: $replyPreview, ')
+          ..write('replyMediaType: $replyMediaType')
           ..write(')'))
         .toString();
   }
@@ -1574,6 +1790,43 @@ class $ConversationsTable extends Conversations
     requiredDuringInsert: false,
     defaultValue: const Constant(''),
   );
+  static const VerificationMeta _leftGroupMeta = const VerificationMeta(
+    'leftGroup',
+  );
+  @override
+  late final GeneratedColumn<bool> leftGroup = GeneratedColumn<bool>(
+    'left_group',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("left_group" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _avatarBlobIdMeta = const VerificationMeta(
+    'avatarBlobId',
+  );
+  @override
+  late final GeneratedColumn<String> avatarBlobId = GeneratedColumn<String>(
+    'avatar_blob_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _avatarKeyMeta = const VerificationMeta(
+    'avatarKey',
+  );
+  @override
+  late final GeneratedColumn<String> avatarKey = GeneratedColumn<String>(
+    'avatar_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     conversationId,
@@ -1584,6 +1837,9 @@ class $ConversationsTable extends Conversations
     groupId,
     lastAt,
     lastPreview,
+    leftGroup,
+    avatarBlobId,
+    avatarKey,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1658,6 +1914,27 @@ class $ConversationsTable extends Conversations
         ),
       );
     }
+    if (data.containsKey('left_group')) {
+      context.handle(
+        _leftGroupMeta,
+        leftGroup.isAcceptableOrUnknown(data['left_group']!, _leftGroupMeta),
+      );
+    }
+    if (data.containsKey('avatar_blob_id')) {
+      context.handle(
+        _avatarBlobIdMeta,
+        avatarBlobId.isAcceptableOrUnknown(
+          data['avatar_blob_id']!,
+          _avatarBlobIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('avatar_key')) {
+      context.handle(
+        _avatarKeyMeta,
+        avatarKey.isAcceptableOrUnknown(data['avatar_key']!, _avatarKeyMeta),
+      );
+    }
     return context;
   }
 
@@ -1699,6 +1976,18 @@ class $ConversationsTable extends Conversations
         DriftSqlType.string,
         data['${effectivePrefix}last_preview'],
       )!,
+      leftGroup: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}left_group'],
+      )!,
+      avatarBlobId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}avatar_blob_id'],
+      ),
+      avatarKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}avatar_key'],
+      ),
     );
   }
 
@@ -1717,6 +2006,14 @@ class Conversation extends DataClass implements Insertable<Conversation> {
   final String? groupId;
   final int lastAt;
   final String lastPreview;
+
+  /// True once the local user leaves (or is removed from) a group. The chat
+  /// stays in the list as a read-only thread instead of vanishing.
+  final bool leftGroup;
+
+  /// Group avatar: encrypted image blob id + its AES key (null = no photo).
+  final String? avatarBlobId;
+  final String? avatarKey;
   const Conversation({
     required this.conversationId,
     this.peerUserId,
@@ -1726,6 +2023,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     this.groupId,
     required this.lastAt,
     required this.lastPreview,
+    required this.leftGroup,
+    this.avatarBlobId,
+    this.avatarKey,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1746,6 +2046,13 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     }
     map['last_at'] = Variable<int>(lastAt);
     map['last_preview'] = Variable<String>(lastPreview);
+    map['left_group'] = Variable<bool>(leftGroup);
+    if (!nullToAbsent || avatarBlobId != null) {
+      map['avatar_blob_id'] = Variable<String>(avatarBlobId);
+    }
+    if (!nullToAbsent || avatarKey != null) {
+      map['avatar_key'] = Variable<String>(avatarKey);
+    }
     return map;
   }
 
@@ -1767,6 +2074,13 @@ class Conversation extends DataClass implements Insertable<Conversation> {
           : Value(groupId),
       lastAt: Value(lastAt),
       lastPreview: Value(lastPreview),
+      leftGroup: Value(leftGroup),
+      avatarBlobId: avatarBlobId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(avatarBlobId),
+      avatarKey: avatarKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(avatarKey),
     );
   }
 
@@ -1784,6 +2098,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
       groupId: serializer.fromJson<String?>(json['groupId']),
       lastAt: serializer.fromJson<int>(json['lastAt']),
       lastPreview: serializer.fromJson<String>(json['lastPreview']),
+      leftGroup: serializer.fromJson<bool>(json['leftGroup']),
+      avatarBlobId: serializer.fromJson<String?>(json['avatarBlobId']),
+      avatarKey: serializer.fromJson<String?>(json['avatarKey']),
     );
   }
   @override
@@ -1798,6 +2115,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
       'groupId': serializer.toJson<String?>(groupId),
       'lastAt': serializer.toJson<int>(lastAt),
       'lastPreview': serializer.toJson<String>(lastPreview),
+      'leftGroup': serializer.toJson<bool>(leftGroup),
+      'avatarBlobId': serializer.toJson<String?>(avatarBlobId),
+      'avatarKey': serializer.toJson<String?>(avatarKey),
     };
   }
 
@@ -1810,6 +2130,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     Value<String?> groupId = const Value.absent(),
     int? lastAt,
     String? lastPreview,
+    bool? leftGroup,
+    Value<String?> avatarBlobId = const Value.absent(),
+    Value<String?> avatarKey = const Value.absent(),
   }) => Conversation(
     conversationId: conversationId ?? this.conversationId,
     peerUserId: peerUserId.present ? peerUserId.value : this.peerUserId,
@@ -1819,6 +2142,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     groupId: groupId.present ? groupId.value : this.groupId,
     lastAt: lastAt ?? this.lastAt,
     lastPreview: lastPreview ?? this.lastPreview,
+    leftGroup: leftGroup ?? this.leftGroup,
+    avatarBlobId: avatarBlobId.present ? avatarBlobId.value : this.avatarBlobId,
+    avatarKey: avatarKey.present ? avatarKey.value : this.avatarKey,
   );
   Conversation copyWithCompanion(ConversationsCompanion data) {
     return Conversation(
@@ -1836,6 +2162,11 @@ class Conversation extends DataClass implements Insertable<Conversation> {
       lastPreview: data.lastPreview.present
           ? data.lastPreview.value
           : this.lastPreview,
+      leftGroup: data.leftGroup.present ? data.leftGroup.value : this.leftGroup,
+      avatarBlobId: data.avatarBlobId.present
+          ? data.avatarBlobId.value
+          : this.avatarBlobId,
+      avatarKey: data.avatarKey.present ? data.avatarKey.value : this.avatarKey,
     );
   }
 
@@ -1849,7 +2180,10 @@ class Conversation extends DataClass implements Insertable<Conversation> {
           ..write('isGroup: $isGroup, ')
           ..write('groupId: $groupId, ')
           ..write('lastAt: $lastAt, ')
-          ..write('lastPreview: $lastPreview')
+          ..write('lastPreview: $lastPreview, ')
+          ..write('leftGroup: $leftGroup, ')
+          ..write('avatarBlobId: $avatarBlobId, ')
+          ..write('avatarKey: $avatarKey')
           ..write(')'))
         .toString();
   }
@@ -1864,6 +2198,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     groupId,
     lastAt,
     lastPreview,
+    leftGroup,
+    avatarBlobId,
+    avatarKey,
   );
   @override
   bool operator ==(Object other) =>
@@ -1876,7 +2213,10 @@ class Conversation extends DataClass implements Insertable<Conversation> {
           other.isGroup == this.isGroup &&
           other.groupId == this.groupId &&
           other.lastAt == this.lastAt &&
-          other.lastPreview == this.lastPreview);
+          other.lastPreview == this.lastPreview &&
+          other.leftGroup == this.leftGroup &&
+          other.avatarBlobId == this.avatarBlobId &&
+          other.avatarKey == this.avatarKey);
 }
 
 class ConversationsCompanion extends UpdateCompanion<Conversation> {
@@ -1888,6 +2228,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
   final Value<String?> groupId;
   final Value<int> lastAt;
   final Value<String> lastPreview;
+  final Value<bool> leftGroup;
+  final Value<String?> avatarBlobId;
+  final Value<String?> avatarKey;
   final Value<int> rowid;
   const ConversationsCompanion({
     this.conversationId = const Value.absent(),
@@ -1898,6 +2241,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     this.groupId = const Value.absent(),
     this.lastAt = const Value.absent(),
     this.lastPreview = const Value.absent(),
+    this.leftGroup = const Value.absent(),
+    this.avatarBlobId = const Value.absent(),
+    this.avatarKey = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ConversationsCompanion.insert({
@@ -1909,6 +2255,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     this.groupId = const Value.absent(),
     required int lastAt,
     this.lastPreview = const Value.absent(),
+    this.leftGroup = const Value.absent(),
+    this.avatarBlobId = const Value.absent(),
+    this.avatarKey = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : conversationId = Value(conversationId),
        lastAt = Value(lastAt);
@@ -1921,6 +2270,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     Expression<String>? groupId,
     Expression<int>? lastAt,
     Expression<String>? lastPreview,
+    Expression<bool>? leftGroup,
+    Expression<String>? avatarBlobId,
+    Expression<String>? avatarKey,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1932,6 +2284,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
       if (groupId != null) 'group_id': groupId,
       if (lastAt != null) 'last_at': lastAt,
       if (lastPreview != null) 'last_preview': lastPreview,
+      if (leftGroup != null) 'left_group': leftGroup,
+      if (avatarBlobId != null) 'avatar_blob_id': avatarBlobId,
+      if (avatarKey != null) 'avatar_key': avatarKey,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1945,6 +2300,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     Value<String?>? groupId,
     Value<int>? lastAt,
     Value<String>? lastPreview,
+    Value<bool>? leftGroup,
+    Value<String?>? avatarBlobId,
+    Value<String?>? avatarKey,
     Value<int>? rowid,
   }) {
     return ConversationsCompanion(
@@ -1956,6 +2314,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
       groupId: groupId ?? this.groupId,
       lastAt: lastAt ?? this.lastAt,
       lastPreview: lastPreview ?? this.lastPreview,
+      leftGroup: leftGroup ?? this.leftGroup,
+      avatarBlobId: avatarBlobId ?? this.avatarBlobId,
+      avatarKey: avatarKey ?? this.avatarKey,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1987,6 +2348,15 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     if (lastPreview.present) {
       map['last_preview'] = Variable<String>(lastPreview.value);
     }
+    if (leftGroup.present) {
+      map['left_group'] = Variable<bool>(leftGroup.value);
+    }
+    if (avatarBlobId.present) {
+      map['avatar_blob_id'] = Variable<String>(avatarBlobId.value);
+    }
+    if (avatarKey.present) {
+      map['avatar_key'] = Variable<String>(avatarKey.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2004,6 +2374,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
           ..write('groupId: $groupId, ')
           ..write('lastAt: $lastAt, ')
           ..write('lastPreview: $lastPreview, ')
+          ..write('leftGroup: $leftGroup, ')
+          ..write('avatarBlobId: $avatarBlobId, ')
+          ..write('avatarKey: $avatarKey, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2659,6 +3032,383 @@ class ConversationSettingsCompanion
   }
 }
 
+class $MessageReactionsTable extends MessageReactions
+    with TableInfo<$MessageReactionsTable, MessageReaction> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MessageReactionsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _targetIdMeta = const VerificationMeta(
+    'targetId',
+  );
+  @override
+  late final GeneratedColumn<String> targetId = GeneratedColumn<String>(
+    'target_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _conversationIdMeta = const VerificationMeta(
+    'conversationId',
+  );
+  @override
+  late final GeneratedColumn<String> conversationId = GeneratedColumn<String>(
+    'conversation_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _reactorUserIdMeta = const VerificationMeta(
+    'reactorUserId',
+  );
+  @override
+  late final GeneratedColumn<String> reactorUserId = GeneratedColumn<String>(
+    'reactor_user_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _emojiMeta = const VerificationMeta('emoji');
+  @override
+  late final GeneratedColumn<String> emoji = GeneratedColumn<String>(
+    'emoji',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    targetId,
+    conversationId,
+    reactorUserId,
+    emoji,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'message_reactions';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<MessageReaction> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('target_id')) {
+      context.handle(
+        _targetIdMeta,
+        targetId.isAcceptableOrUnknown(data['target_id']!, _targetIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_targetIdMeta);
+    }
+    if (data.containsKey('conversation_id')) {
+      context.handle(
+        _conversationIdMeta,
+        conversationId.isAcceptableOrUnknown(
+          data['conversation_id']!,
+          _conversationIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_conversationIdMeta);
+    }
+    if (data.containsKey('reactor_user_id')) {
+      context.handle(
+        _reactorUserIdMeta,
+        reactorUserId.isAcceptableOrUnknown(
+          data['reactor_user_id']!,
+          _reactorUserIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_reactorUserIdMeta);
+    }
+    if (data.containsKey('emoji')) {
+      context.handle(
+        _emojiMeta,
+        emoji.isAcceptableOrUnknown(data['emoji']!, _emojiMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_emojiMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {targetId, reactorUserId};
+  @override
+  MessageReaction map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return MessageReaction(
+      targetId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}target_id'],
+      )!,
+      conversationId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}conversation_id'],
+      )!,
+      reactorUserId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reactor_user_id'],
+      )!,
+      emoji: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}emoji'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $MessageReactionsTable createAlias(String alias) {
+    return $MessageReactionsTable(attachedDatabase, alias);
+  }
+}
+
+class MessageReaction extends DataClass implements Insertable<MessageReaction> {
+  /// Target message id (server message_id / envelopeId).
+  final String targetId;
+  final String conversationId;
+  final String reactorUserId;
+  final String emoji;
+  final int updatedAt;
+  const MessageReaction({
+    required this.targetId,
+    required this.conversationId,
+    required this.reactorUserId,
+    required this.emoji,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['target_id'] = Variable<String>(targetId);
+    map['conversation_id'] = Variable<String>(conversationId);
+    map['reactor_user_id'] = Variable<String>(reactorUserId);
+    map['emoji'] = Variable<String>(emoji);
+    map['updated_at'] = Variable<int>(updatedAt);
+    return map;
+  }
+
+  MessageReactionsCompanion toCompanion(bool nullToAbsent) {
+    return MessageReactionsCompanion(
+      targetId: Value(targetId),
+      conversationId: Value(conversationId),
+      reactorUserId: Value(reactorUserId),
+      emoji: Value(emoji),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory MessageReaction.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return MessageReaction(
+      targetId: serializer.fromJson<String>(json['targetId']),
+      conversationId: serializer.fromJson<String>(json['conversationId']),
+      reactorUserId: serializer.fromJson<String>(json['reactorUserId']),
+      emoji: serializer.fromJson<String>(json['emoji']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'targetId': serializer.toJson<String>(targetId),
+      'conversationId': serializer.toJson<String>(conversationId),
+      'reactorUserId': serializer.toJson<String>(reactorUserId),
+      'emoji': serializer.toJson<String>(emoji),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+    };
+  }
+
+  MessageReaction copyWith({
+    String? targetId,
+    String? conversationId,
+    String? reactorUserId,
+    String? emoji,
+    int? updatedAt,
+  }) => MessageReaction(
+    targetId: targetId ?? this.targetId,
+    conversationId: conversationId ?? this.conversationId,
+    reactorUserId: reactorUserId ?? this.reactorUserId,
+    emoji: emoji ?? this.emoji,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  MessageReaction copyWithCompanion(MessageReactionsCompanion data) {
+    return MessageReaction(
+      targetId: data.targetId.present ? data.targetId.value : this.targetId,
+      conversationId: data.conversationId.present
+          ? data.conversationId.value
+          : this.conversationId,
+      reactorUserId: data.reactorUserId.present
+          ? data.reactorUserId.value
+          : this.reactorUserId,
+      emoji: data.emoji.present ? data.emoji.value : this.emoji,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MessageReaction(')
+          ..write('targetId: $targetId, ')
+          ..write('conversationId: $conversationId, ')
+          ..write('reactorUserId: $reactorUserId, ')
+          ..write('emoji: $emoji, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(targetId, conversationId, reactorUserId, emoji, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is MessageReaction &&
+          other.targetId == this.targetId &&
+          other.conversationId == this.conversationId &&
+          other.reactorUserId == this.reactorUserId &&
+          other.emoji == this.emoji &&
+          other.updatedAt == this.updatedAt);
+}
+
+class MessageReactionsCompanion extends UpdateCompanion<MessageReaction> {
+  final Value<String> targetId;
+  final Value<String> conversationId;
+  final Value<String> reactorUserId;
+  final Value<String> emoji;
+  final Value<int> updatedAt;
+  final Value<int> rowid;
+  const MessageReactionsCompanion({
+    this.targetId = const Value.absent(),
+    this.conversationId = const Value.absent(),
+    this.reactorUserId = const Value.absent(),
+    this.emoji = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  MessageReactionsCompanion.insert({
+    required String targetId,
+    required String conversationId,
+    required String reactorUserId,
+    required String emoji,
+    required int updatedAt,
+    this.rowid = const Value.absent(),
+  }) : targetId = Value(targetId),
+       conversationId = Value(conversationId),
+       reactorUserId = Value(reactorUserId),
+       emoji = Value(emoji),
+       updatedAt = Value(updatedAt);
+  static Insertable<MessageReaction> custom({
+    Expression<String>? targetId,
+    Expression<String>? conversationId,
+    Expression<String>? reactorUserId,
+    Expression<String>? emoji,
+    Expression<int>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (targetId != null) 'target_id': targetId,
+      if (conversationId != null) 'conversation_id': conversationId,
+      if (reactorUserId != null) 'reactor_user_id': reactorUserId,
+      if (emoji != null) 'emoji': emoji,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  MessageReactionsCompanion copyWith({
+    Value<String>? targetId,
+    Value<String>? conversationId,
+    Value<String>? reactorUserId,
+    Value<String>? emoji,
+    Value<int>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return MessageReactionsCompanion(
+      targetId: targetId ?? this.targetId,
+      conversationId: conversationId ?? this.conversationId,
+      reactorUserId: reactorUserId ?? this.reactorUserId,
+      emoji: emoji ?? this.emoji,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (targetId.present) {
+      map['target_id'] = Variable<String>(targetId.value);
+    }
+    if (conversationId.present) {
+      map['conversation_id'] = Variable<String>(conversationId.value);
+    }
+    if (reactorUserId.present) {
+      map['reactor_user_id'] = Variable<String>(reactorUserId.value);
+    }
+    if (emoji.present) {
+      map['emoji'] = Variable<String>(emoji.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MessageReactionsCompanion(')
+          ..write('targetId: $targetId, ')
+          ..write('conversationId: $conversationId, ')
+          ..write('reactorUserId: $reactorUserId, ')
+          ..write('emoji: $emoji, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2669,6 +3419,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   );
   late final $ConversationSettingsTable conversationSettings =
       $ConversationSettingsTable(this);
+  late final $MessageReactionsTable messageReactions = $MessageReactionsTable(
+    this,
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2678,6 +3431,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     conversations,
     callHistoryItems,
     conversationSettings,
+    messageReactions,
   ];
 }
 
@@ -2709,6 +3463,10 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int?> mediaSize,
       Value<int?> mediaDurationMs,
       Value<String?> mediaWaveform,
+      Value<String?> replyToId,
+      Value<String?> replySender,
+      Value<String?> replyPreview,
+      Value<String?> replyMediaType,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -2738,6 +3496,10 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int?> mediaSize,
       Value<int?> mediaDurationMs,
       Value<String?> mediaWaveform,
+      Value<String?> replyToId,
+      Value<String?> replySender,
+      Value<String?> replyPreview,
+      Value<String?> replyMediaType,
     });
 
 class $$MessagesTableFilterComposer
@@ -2876,6 +3638,26 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get mediaWaveform => $composableBuilder(
     column: $table.mediaWaveform,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get replyToId => $composableBuilder(
+    column: $table.replyToId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get replySender => $composableBuilder(
+    column: $table.replySender,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get replyPreview => $composableBuilder(
+    column: $table.replyPreview,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get replyMediaType => $composableBuilder(
+    column: $table.replyMediaType,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3018,6 +3800,26 @@ class $$MessagesTableOrderingComposer
     column: $table.mediaWaveform,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get replyToId => $composableBuilder(
+    column: $table.replyToId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get replySender => $composableBuilder(
+    column: $table.replySender,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get replyPreview => $composableBuilder(
+    column: $table.replyPreview,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get replyMediaType => $composableBuilder(
+    column: $table.replyMediaType,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -3132,6 +3934,24 @@ class $$MessagesTableAnnotationComposer
     column: $table.mediaWaveform,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get replyToId =>
+      $composableBuilder(column: $table.replyToId, builder: (column) => column);
+
+  GeneratedColumn<String> get replySender => $composableBuilder(
+    column: $table.replySender,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get replyPreview => $composableBuilder(
+    column: $table.replyPreview,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get replyMediaType => $composableBuilder(
+    column: $table.replyMediaType,
+    builder: (column) => column,
+  );
 }
 
 class $$MessagesTableTableManager
@@ -3188,6 +4008,10 @@ class $$MessagesTableTableManager
                 Value<int?> mediaSize = const Value.absent(),
                 Value<int?> mediaDurationMs = const Value.absent(),
                 Value<String?> mediaWaveform = const Value.absent(),
+                Value<String?> replyToId = const Value.absent(),
+                Value<String?> replySender = const Value.absent(),
+                Value<String?> replyPreview = const Value.absent(),
+                Value<String?> replyMediaType = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
                 serverId: serverId,
@@ -3215,6 +4039,10 @@ class $$MessagesTableTableManager
                 mediaSize: mediaSize,
                 mediaDurationMs: mediaDurationMs,
                 mediaWaveform: mediaWaveform,
+                replyToId: replyToId,
+                replySender: replySender,
+                replyPreview: replyPreview,
+                replyMediaType: replyMediaType,
               ),
           createCompanionCallback:
               ({
@@ -3244,6 +4072,10 @@ class $$MessagesTableTableManager
                 Value<int?> mediaSize = const Value.absent(),
                 Value<int?> mediaDurationMs = const Value.absent(),
                 Value<String?> mediaWaveform = const Value.absent(),
+                Value<String?> replyToId = const Value.absent(),
+                Value<String?> replySender = const Value.absent(),
+                Value<String?> replyPreview = const Value.absent(),
+                Value<String?> replyMediaType = const Value.absent(),
               }) => MessagesCompanion.insert(
                 localId: localId,
                 serverId: serverId,
@@ -3271,6 +4103,10 @@ class $$MessagesTableTableManager
                 mediaSize: mediaSize,
                 mediaDurationMs: mediaDurationMs,
                 mediaWaveform: mediaWaveform,
+                replyToId: replyToId,
+                replySender: replySender,
+                replyPreview: replyPreview,
+                replyMediaType: replyMediaType,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
@@ -3304,6 +4140,9 @@ typedef $$ConversationsTableCreateCompanionBuilder =
       Value<String?> groupId,
       required int lastAt,
       Value<String> lastPreview,
+      Value<bool> leftGroup,
+      Value<String?> avatarBlobId,
+      Value<String?> avatarKey,
       Value<int> rowid,
     });
 typedef $$ConversationsTableUpdateCompanionBuilder =
@@ -3316,6 +4155,9 @@ typedef $$ConversationsTableUpdateCompanionBuilder =
       Value<String?> groupId,
       Value<int> lastAt,
       Value<String> lastPreview,
+      Value<bool> leftGroup,
+      Value<String?> avatarBlobId,
+      Value<String?> avatarKey,
       Value<int> rowid,
     });
 
@@ -3365,6 +4207,21 @@ class $$ConversationsTableFilterComposer
 
   ColumnFilters<String> get lastPreview => $composableBuilder(
     column: $table.lastPreview,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get leftGroup => $composableBuilder(
+    column: $table.leftGroup,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get avatarBlobId => $composableBuilder(
+    column: $table.avatarBlobId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get avatarKey => $composableBuilder(
+    column: $table.avatarKey,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3417,6 +4274,21 @@ class $$ConversationsTableOrderingComposer
     column: $table.lastPreview,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get leftGroup => $composableBuilder(
+    column: $table.leftGroup,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get avatarBlobId => $composableBuilder(
+    column: $table.avatarBlobId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get avatarKey => $composableBuilder(
+    column: $table.avatarKey,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ConversationsTableAnnotationComposer
@@ -3457,6 +4329,17 @@ class $$ConversationsTableAnnotationComposer
     column: $table.lastPreview,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get leftGroup =>
+      $composableBuilder(column: $table.leftGroup, builder: (column) => column);
+
+  GeneratedColumn<String> get avatarBlobId => $composableBuilder(
+    column: $table.avatarBlobId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get avatarKey =>
+      $composableBuilder(column: $table.avatarKey, builder: (column) => column);
 }
 
 class $$ConversationsTableTableManager
@@ -3498,6 +4381,9 @@ class $$ConversationsTableTableManager
                 Value<String?> groupId = const Value.absent(),
                 Value<int> lastAt = const Value.absent(),
                 Value<String> lastPreview = const Value.absent(),
+                Value<bool> leftGroup = const Value.absent(),
+                Value<String?> avatarBlobId = const Value.absent(),
+                Value<String?> avatarKey = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ConversationsCompanion(
                 conversationId: conversationId,
@@ -3508,6 +4394,9 @@ class $$ConversationsTableTableManager
                 groupId: groupId,
                 lastAt: lastAt,
                 lastPreview: lastPreview,
+                leftGroup: leftGroup,
+                avatarBlobId: avatarBlobId,
+                avatarKey: avatarKey,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -3520,6 +4409,9 @@ class $$ConversationsTableTableManager
                 Value<String?> groupId = const Value.absent(),
                 required int lastAt,
                 Value<String> lastPreview = const Value.absent(),
+                Value<bool> leftGroup = const Value.absent(),
+                Value<String?> avatarBlobId = const Value.absent(),
+                Value<String?> avatarKey = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ConversationsCompanion.insert(
                 conversationId: conversationId,
@@ -3530,6 +4422,9 @@ class $$ConversationsTableTableManager
                 groupId: groupId,
                 lastAt: lastAt,
                 lastPreview: lastPreview,
+                leftGroup: leftGroup,
+                avatarBlobId: avatarBlobId,
+                avatarKey: avatarKey,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -3947,6 +4842,216 @@ typedef $$ConversationSettingsTableProcessedTableManager =
       ConversationSetting,
       PrefetchHooks Function()
     >;
+typedef $$MessageReactionsTableCreateCompanionBuilder =
+    MessageReactionsCompanion Function({
+      required String targetId,
+      required String conversationId,
+      required String reactorUserId,
+      required String emoji,
+      required int updatedAt,
+      Value<int> rowid,
+    });
+typedef $$MessageReactionsTableUpdateCompanionBuilder =
+    MessageReactionsCompanion Function({
+      Value<String> targetId,
+      Value<String> conversationId,
+      Value<String> reactorUserId,
+      Value<String> emoji,
+      Value<int> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$MessageReactionsTableFilterComposer
+    extends Composer<_$AppDatabase, $MessageReactionsTable> {
+  $$MessageReactionsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get targetId => $composableBuilder(
+    column: $table.targetId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get reactorUserId => $composableBuilder(
+    column: $table.reactorUserId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get emoji => $composableBuilder(
+    column: $table.emoji,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$MessageReactionsTableOrderingComposer
+    extends Composer<_$AppDatabase, $MessageReactionsTable> {
+  $$MessageReactionsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get targetId => $composableBuilder(
+    column: $table.targetId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get reactorUserId => $composableBuilder(
+    column: $table.reactorUserId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get emoji => $composableBuilder(
+    column: $table.emoji,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$MessageReactionsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $MessageReactionsTable> {
+  $$MessageReactionsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get targetId =>
+      $composableBuilder(column: $table.targetId, builder: (column) => column);
+
+  GeneratedColumn<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get reactorUserId => $composableBuilder(
+    column: $table.reactorUserId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get emoji =>
+      $composableBuilder(column: $table.emoji, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$MessageReactionsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $MessageReactionsTable,
+          MessageReaction,
+          $$MessageReactionsTableFilterComposer,
+          $$MessageReactionsTableOrderingComposer,
+          $$MessageReactionsTableAnnotationComposer,
+          $$MessageReactionsTableCreateCompanionBuilder,
+          $$MessageReactionsTableUpdateCompanionBuilder,
+          (
+            MessageReaction,
+            BaseReferences<
+              _$AppDatabase,
+              $MessageReactionsTable,
+              MessageReaction
+            >,
+          ),
+          MessageReaction,
+          PrefetchHooks Function()
+        > {
+  $$MessageReactionsTableTableManager(
+    _$AppDatabase db,
+    $MessageReactionsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MessageReactionsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$MessageReactionsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$MessageReactionsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> targetId = const Value.absent(),
+                Value<String> conversationId = const Value.absent(),
+                Value<String> reactorUserId = const Value.absent(),
+                Value<String> emoji = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => MessageReactionsCompanion(
+                targetId: targetId,
+                conversationId: conversationId,
+                reactorUserId: reactorUserId,
+                emoji: emoji,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String targetId,
+                required String conversationId,
+                required String reactorUserId,
+                required String emoji,
+                required int updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => MessageReactionsCompanion.insert(
+                targetId: targetId,
+                conversationId: conversationId,
+                reactorUserId: reactorUserId,
+                emoji: emoji,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$MessageReactionsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $MessageReactionsTable,
+      MessageReaction,
+      $$MessageReactionsTableFilterComposer,
+      $$MessageReactionsTableOrderingComposer,
+      $$MessageReactionsTableAnnotationComposer,
+      $$MessageReactionsTableCreateCompanionBuilder,
+      $$MessageReactionsTableUpdateCompanionBuilder,
+      (
+        MessageReaction,
+        BaseReferences<_$AppDatabase, $MessageReactionsTable, MessageReaction>,
+      ),
+      MessageReaction,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3959,4 +5064,6 @@ class $AppDatabaseManager {
       $$CallHistoryItemsTableTableManager(_db, _db.callHistoryItems);
   $$ConversationSettingsTableTableManager get conversationSettings =>
       $$ConversationSettingsTableTableManager(_db, _db.conversationSettings);
+  $$MessageReactionsTableTableManager get messageReactions =>
+      $$MessageReactionsTableTableManager(_db, _db.messageReactions);
 }

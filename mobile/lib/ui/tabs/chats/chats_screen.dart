@@ -12,6 +12,7 @@ import '../../../core/db/message_store.dart';
 import '../../../core/realtime/chat_realtime_service.dart';
 import '../../chats/chat_thread_screen.dart';
 import '../../chats/create_group_screen.dart';
+import '../../chats/group_avatar.dart';
 import '../../chats/new_chat_screen.dart';
 
 class ChatsScreen extends ConsumerStatefulWidget {
@@ -234,9 +235,11 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                             child: _ChatTile(
                               name: c.peer.label,
                               username: c.isGroup ? null : c.peer.username,
-                              message: c.lastPreview,
+                              message: c.leftGroup ? 'You left the group' : c.lastPreview,
                               time: _formatTime(c.lastAt),
                               isGroup: c.isGroup,
+                              avatarBlobId: c.avatarBlobId,
+                              avatarKey: c.avatarKey,
                               onTap: () async {
                                 await Navigator.of(context).push(
                                   MaterialPageRoute<void>(
@@ -297,6 +300,8 @@ class _ChatTile extends StatelessWidget {
     required this.onTap,
     this.username,
     this.isGroup = false,
+    this.avatarBlobId,
+    this.avatarKey,
   });
 
   final String name;
@@ -305,6 +310,11 @@ class _ChatTile extends StatelessWidget {
   final String time;
   final VoidCallback onTap;
   final bool isGroup;
+  final String? avatarBlobId;
+  final String? avatarKey;
+
+  bool get _hasGroupAvatar =>
+      isGroup && (avatarBlobId?.isNotEmpty ?? false) && (avatarKey?.isNotEmpty ?? false);
 
   @override
   Widget build(BuildContext context) {
@@ -317,11 +327,14 @@ class _ChatTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 22,
-                backgroundColor: primary.withValues(alpha: 0.12),
-                child: Icon(isGroup ? Icons.groups_outlined : Icons.person_outline, color: primary),
-              ),
+              if (_hasGroupAvatar)
+                GroupAvatar(title: name, blobId: avatarBlobId, avatarKey: avatarKey, radius: 22)
+              else
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: primary.withValues(alpha: 0.12),
+                  child: Icon(isGroup ? Icons.groups_outlined : Icons.person_outline, color: primary),
+                ),
               const Gap(12),
               Expanded(
                 child: Column(

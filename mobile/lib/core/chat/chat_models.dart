@@ -1,3 +1,7 @@
+/// Marker sender id for group lifecycle system lines ("X added Y"). Such rows
+/// are rendered as a centered grey notice rather than a chat bubble.
+const String kSystemSenderId = '__system__';
+
 class ChatPeer {
   const ChatPeer({
     required this.userId,
@@ -35,6 +39,9 @@ class ConversationSummary {
     this.lastPreview = '',
     this.isGroup = false,
     this.groupId,
+    this.leftGroup = false,
+    this.avatarBlobId,
+    this.avatarKey,
   });
 
   final String conversationId;
@@ -43,6 +50,13 @@ class ConversationSummary {
   final String lastPreview;
   final bool isGroup;
   final String? groupId;
+  final bool leftGroup;
+
+  /// Group avatar (encrypted blob id + AES key); null for DMs / no photo.
+  final String? avatarBlobId;
+  final String? avatarKey;
+
+  bool get hasAvatar => (avatarBlobId?.isNotEmpty ?? false) && (avatarKey?.isNotEmpty ?? false);
 }
 
 class ChatMessage {
@@ -72,6 +86,10 @@ class ChatMessage {
     this.mediaSize,
     this.mediaDurationMs,
     this.mediaWaveform,
+    this.replyToId,
+    this.replySender,
+    this.replyPreview,
+    this.replyMediaType,
   });
 
   final String id;
@@ -124,10 +142,17 @@ class ChatMessage {
   /// Voice-note waveform bars (0–100).
   final List<int>? mediaWaveform;
 
+  /// Quote/reply: the message this one replies to (id + cached preview).
+  final String? replyToId;
+  final String? replySender;
+  final String? replyPreview;
+  final String? replyMediaType;
+
   bool get isMedia => mediaType != null && mediaBlobId != null;
   bool get isImage => mediaType == 'image';
   bool get isFile => mediaType == 'file';
   bool get isVoice => mediaType == 'voice';
+  bool get isReply => replyToId != null;
 
   bool get confirmedOnServer => !id.startsWith('local-');
 
@@ -157,6 +182,10 @@ class ChatMessage {
     int? mediaSize,
     int? mediaDurationMs,
     List<int>? mediaWaveform,
+    String? replyToId,
+    String? replySender,
+    String? replyPreview,
+    String? replyMediaType,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -184,7 +213,26 @@ class ChatMessage {
       mediaSize: mediaSize ?? this.mediaSize,
       mediaDurationMs: mediaDurationMs ?? this.mediaDurationMs,
       mediaWaveform: mediaWaveform ?? this.mediaWaveform,
+      replyToId: replyToId ?? this.replyToId,
+      replySender: replySender ?? this.replySender,
+      replyPreview: replyPreview ?? this.replyPreview,
+      replyMediaType: replyMediaType ?? this.replyMediaType,
     );
   }
+}
+
+/// A single user's reaction to a message (one emoji per user).
+class ReactionView {
+  const ReactionView({
+    required this.targetId,
+    required this.reactorUserId,
+    required this.emoji,
+    required this.isMine,
+  });
+
+  final String targetId;
+  final String reactorUserId;
+  final String emoji;
+  final bool isMine;
 }
 

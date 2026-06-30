@@ -59,6 +59,8 @@ class ChatRepository {
         lastPreview: lastCiphertext != null && lastCiphertext.isNotEmpty ? '💬 Message' : '',
         isGroup: isGroup,
         groupId: isGroup ? groupIdFromConversation(conversationId) : null,
+        avatarBlobId: isGroup ? row['group_avatar_blob_id'] as String? : null,
+        avatarKey: isGroup ? row['group_avatar_key'] as String? : null,
       );
     }).toList();
     // Cache for instant/offline chat list.
@@ -145,6 +147,22 @@ class ChatRepository {
       _store.setDisappearing(conversationId, wire.timerSeconds);
       return null;
     }
+    if (wire.isReaction) {
+      final tid = wire.reactionTargetId;
+      if (tid != null) {
+        if (wire.reactionAdd && wire.reactionEmoji != null) {
+          _store.setReaction(
+            conversationId: conversationId,
+            targetId: tid,
+            reactorUserId: senderId,
+            emoji: wire.reactionEmoji!,
+          );
+        } else {
+          _store.removeReaction(targetId: tid, reactorUserId: senderId);
+        }
+      }
+      return null;
+    }
     return ChatMessage(
       id: id,
       conversationId: conversationId,
@@ -166,39 +184,32 @@ class ChatRepository {
       mediaSize: wire.mediaSize,
       mediaDurationMs: wire.mediaDurationMs,
       mediaWaveform: wire.mediaWaveform,
+      replyToId: wire.replyToId,
+      replySender: wire.replySender,
+      replyPreview: wire.replyPreview,
+      replyMediaType: wire.replyMediaType,
     );
   }
 
   Future<List<ChatMessage>> _fetchGroupMessages(String conversationId, List<dynamic> rows) async {
     final groupId = groupIdFromConversation(conversationId);
     if (groupId == null) return [];
-    final groupKey = await _groups.loadGroupKey(groupId);
-    if (groupKey == null) {
-      return rows.map((raw) {
-        final row = raw as Map<String, dynamic>;
-        return ChatMessage(
-          id: row['id'] as String,
-          conversationId: conversationId,
-          senderUserId: row['sender_user_id'] as String,
-          text: '🔒 Waiting for group key',
-          createdAt: DateTime.parse(row['created_at'] as String),
-          isMine: row['sender_user_id'] == _myUserId,
-          clientMessageId: row['client_message_id'] as String?,
-        );
-      }).toList();
-    }
 
     final out = <ChatMessage>[];
     for (final raw in rows) {
       final row = raw as Map<String, dynamic>;
       final senderId = row['sender_user_id'] as String;
+      final ciphertext = row['ciphertext'] as String;
       String text;
       try {
-        text = await GroupCryptoService.decryptMessage(
-          groupId: groupId,
-          groupKey: groupKey,
-          ciphertext: row['ciphertext'] as String,
-        );
+        final epoch = GroupCryptoService.ciphertextEpoch(ciphertext);
+        final groupKey = await _groups.loadGroupKey(groupId, epoch);
+        text = groupKey == null
+            ? '🔒 Waiting for group key'
+            : await GroupCryptoService.decryptMessage(
+                groupKey: groupKey,
+                ciphertext: ciphertext,
+              );
       } catch (_) {
         text = '🔒 Unable to decrypt';
       }
@@ -237,11 +248,11 @@ class ChatRepository {
   }
 
   Future<String> _decryptGroupPush(String groupId, String ciphertext) async {
-    final groupKey = await _groups.loadGroupKey(groupId);
+    final epoch = GroupCryptoService.ciphertextEpoch(ciphertext);
+    final groupKey = await _groups.loadGroupKey(groupId, epoch);
     if (groupKey == null) return '🔒 Waiting for group key';
     try {
       return GroupCryptoService.decryptMessage(
-        groupId: groupId,
         groupKey: groupKey,
         ciphertext: ciphertext,
       );
@@ -305,14 +316,27 @@ class ChatRepository {
 
   Future<void> warmPeer(String peerUserId) => _deviceKeys.warmPeer(peerUserId);
 
+  /// Permanently delete this device's server-side envelope for a view-once
+  /// message so its ciphertext can never be re-fetched and decrypted again.
+  /// Idempotent; safe to call on ingest and again on open.
+  Future<void> consumeViewOnce(String messageId) async {
+    try {
+      await _dio.post('/messages/$messageId/consume', data: const <String, dynamic>{});
+    } catch (_) {
+      // Best-effort; the local copy is already wiped on view regardless.
+    }
+  }
+
   Future<String> sendMessage({
     required String recipientUserId,
     required String plaintext,
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
-    final wired = ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
+    final wired =
+        ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds, reply: reply);
     return _sendDmWire(
       recipientUserId: recipientUserId,
       wired: wired,
@@ -334,6 +358,7 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final wired = ChatWire.encodeMedia(
       mediaType: 'image',
@@ -346,6 +371,7 @@ class ChatRepository {
       caption: caption,
       viewOnce: viewOnce,
       ttlSeconds: ttlSeconds,
+      reply: reply,
     );
     return _sendDmWire(
       recipientUserId: recipientUserId,
@@ -366,6 +392,7 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final wired = ChatWire.encodeFile(
       blobId: blobId,
@@ -376,6 +403,7 @@ class ChatRepository {
       caption: caption,
       viewOnce: viewOnce,
       ttlSeconds: ttlSeconds,
+      reply: reply,
     );
     return _sendDmWire(
       recipientUserId: recipientUserId,
@@ -396,6 +424,7 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final wired = ChatWire.encodeVoice(
       blobId: blobId,
@@ -406,12 +435,25 @@ class ChatRepository {
       size: size,
       viewOnce: viewOnce,
       ttlSeconds: ttlSeconds,
+      reply: reply,
     );
     return _sendDmWire(
       recipientUserId: recipientUserId,
       wired: wired,
       clientMessageId: clientMessageId,
     );
+  }
+
+  /// Sends an emoji reaction (or removes one) on [targetId] in a DM. Travels as
+  /// an E2EE control payload — never rendered as a bubble by the recipient.
+  Future<String> sendDmReaction({
+    required String recipientUserId,
+    required String targetId,
+    required String emoji,
+    required bool add,
+  }) {
+    final wired = ChatWire.encodeReaction(targetId: targetId, emoji: emoji, add: add);
+    return _sendDmWire(recipientUserId: recipientUserId, wired: wired);
   }
 
   Future<String> _sendDmWire({
@@ -480,9 +522,21 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
-    final wired = ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
+    final wired =
+        ChatWire.encodeText(plaintext, viewOnce: viewOnce, ttlSeconds: ttlSeconds, reply: reply);
     return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
+  }
+
+  Future<String> sendGroupReaction({
+    required String groupId,
+    required String targetId,
+    required String emoji,
+    required bool add,
+  }) {
+    final wired = ChatWire.encodeReaction(targetId: targetId, emoji: emoji, add: add);
+    return _sendGroupWire(groupId: groupId, wired: wired);
   }
 
   Future<String> sendGroupImage({
@@ -497,6 +551,7 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final wired = ChatWire.encodeMedia(
       mediaType: 'image',
@@ -509,6 +564,7 @@ class ChatRepository {
       caption: caption,
       viewOnce: viewOnce,
       ttlSeconds: ttlSeconds,
+      reply: reply,
     );
     return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
   }
@@ -524,6 +580,7 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final wired = ChatWire.encodeFile(
       blobId: blobId,
@@ -534,6 +591,7 @@ class ChatRepository {
       caption: caption,
       viewOnce: viewOnce,
       ttlSeconds: ttlSeconds,
+      reply: reply,
     );
     return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
   }
@@ -549,6 +607,7 @@ class ChatRepository {
     String? clientMessageId,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final wired = ChatWire.encodeVoice(
       blobId: blobId,
@@ -559,6 +618,7 @@ class ChatRepository {
       size: size,
       viewOnce: viewOnce,
       ttlSeconds: ttlSeconds,
+      reply: reply,
     );
     return _sendGroupWire(groupId: groupId, wired: wired, clientMessageId: clientMessageId);
   }
@@ -569,8 +629,9 @@ class ChatRepository {
     String? clientMessageId,
   }) async {
     final conversationId = groupConversationId(groupId);
-    var groupKey = GroupCryptoService.cachedGroupKey(groupId);
-    groupKey ??= await _groups.loadGroupKey(groupId);
+    final epoch = await _groups.currentEpoch(groupId);
+    var groupKey = GroupCryptoService.cachedGroupKey(groupId, epoch);
+    groupKey ??= await _groups.loadGroupKey(groupId, epoch);
     if (groupKey == null) {
       throw Exception('Group encryption key not available yet');
     }
@@ -578,6 +639,7 @@ class ChatRepository {
     final ciphertext = await GroupCryptoService.encryptMessage(
       groupId: groupId,
       groupKey: groupKey,
+      epoch: epoch,
       plaintext: wired,
     );
 
@@ -614,6 +676,14 @@ class ChatRepository {
     final confirmed = <({String clientMessageId, String envelopeId})>[];
     for (final e in entries) {
       try {
+        final reply = e.replyToId == null
+            ? null
+            : WireReply(
+                id: e.replyToId!,
+                sender: e.replySender,
+                preview: e.replyPreview,
+                mediaType: e.replyMediaType,
+              );
         final envelopeId = e.isGroup
             ? await sendGroupMessage(
                 groupId: e.groupId!,
@@ -621,6 +691,7 @@ class ChatRepository {
                 clientMessageId: e.clientMessageId,
                 viewOnce: e.viewOnce,
                 ttlSeconds: e.ttlSeconds,
+                reply: reply,
               )
             : await sendMessage(
                 recipientUserId: e.recipientUserId!,
@@ -628,6 +699,7 @@ class ChatRepository {
                 clientMessageId: e.clientMessageId,
                 viewOnce: e.viewOnce,
                 ttlSeconds: e.ttlSeconds,
+                reply: reply,
               );
         await _outbox.remove(e.clientMessageId);
         await _store.confirmSent(e.clientMessageId, envelopeId);

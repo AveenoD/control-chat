@@ -3,7 +3,11 @@ import 'dart:io';
 
 
 
+import 'package:dio/dio.dart';
+
 import 'package:flutter/material.dart';
+
+import 'package:flutter/services.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -25,11 +29,17 @@ import '../../core/auth/auth_repository.dart';
 
 import '../../core/calls/call_repository.dart';
 
+import '../../core/security/screen_security.dart';
+
+import 'group_avatar.dart';
+
 import '../../core/chat/chat_models.dart';
 
 import '../../core/chat/chat_repository.dart';
 
 import '../../core/chat/conversation_id.dart';
+
+import '../../core/chat/group_repository.dart';
 
 import '../../core/chat/media_service.dart';
 
@@ -42,6 +52,8 @@ import '../../core/chat/outbox_service.dart';
 import '../../core/db/message_store.dart';
 
 import '../../core/auth/session_provider.dart';
+
+import 'group_info_screen.dart';
 
 import 'media_preview_screen.dart';
 
@@ -109,6 +121,16 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
   bool _isGroup = false;
 
+  /// True when the local user has left / been removed from this group → the
+  /// thread becomes read-only but stays visible.
+  bool _leftGroup = false;
+
+  StreamSubscription<bool>? _leftSub;
+
+  /// Group avatar (encrypted blob id + key), shown in the app bar for groups.
+  String? _groupAvatarBlobId;
+  String? _groupAvatarKey;
+
   Timer? _typingDebounce;
 
   Timer? _typingClearTimer;
@@ -117,6 +139,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
   StreamSubscription<Map<String, dynamic>>? _realtimeSub;
 
   StreamSubscription<List<ChatMessage>>? _messagesSub;
+
+  StreamSubscription<Map<String, List<ReactionView>>>? _reactionsSub;
+
+  /// targetMessageId -> reactions, for rendering reaction chips.
+  Map<String, List<ReactionView>> _reactions = {};
+
+  /// The message currently being replied to (composer banner active).
+  ChatMessage? _replyingTo;
+
+  /// Briefly highlighted message after tapping a quote (scroll-to-original).
+  String? _highlightedId;
 
   Future<void>? _inFlight;
 
@@ -205,10 +238,81 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     _purgeUndecryptableThenSync();
     _flushOutbox();
 
+    if (_isGroup && _groupId != null) {
+      _leftSub = ref
+          .read(messageStoreProvider)
+          .watchGroupLeft(_conversationId!)
+          .listen((left) {
+        if (mounted && left != _leftGroup) setState(() => _leftGroup = left);
+      });
+      _initGroup();
+    }
+
     _startRealtime();
 
     _input.addListener(_onInputChanged);
 
+  }
+
+  /// Group bootstrap: handle any pending key rotation (designated admin only)
+  /// and back-fill membership system lines so they render on a cold open.
+  Future<void> _initGroup() async {
+    final gid = _groupId;
+    final convId = _conversationId;
+    if (gid == null || convId == null) return;
+    final store = ref.read(messageStoreProvider);
+
+    // Already known to be left → stay read-only, skip member-only calls (403).
+    if (await store.isGroupLeft(convId)) return;
+
+    final groups = ref.read(groupRepositoryProvider);
+    try {
+      // getMeta 403s if we were silently removed by an admin (we never receive
+      // our own removal event) → flip the thread to read-only.
+      final meta = await groups.getMeta(gid);
+      if (mounted) {
+        setState(() {
+          _groupAvatarBlobId = meta.avatarBlobId;
+          _groupAvatarKey = meta.avatarKey;
+        });
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 403) {
+        await store.markGroupLeft(convId);
+        await store.upsertServerMessage(ChatMessage(
+          // Stable id → re-opens dedupe instead of stacking the notice.
+          id: 'sys-removed-$convId',
+          conversationId: convId,
+          senderUserId: kSystemSenderId,
+          text: "You're no longer a member of this group",
+          createdAt: DateTime.now(),
+          isMine: false,
+        ));
+        return;
+      }
+    } catch (_) {}
+
+    await groups.rotateIfNeeded(gid).catchError((_) {});
+    // Heal key distribution: if I hold the key, (re)seal it to any member device
+    // that never received it (new/reinstalled device). Lets peers recover.
+    await groups.ensureKeyDistributed(gid).catchError((_) {});
+    try {
+      final myId = ref.read(sessionProvider).userId;
+      final msgs = await groups.fetchSystemMessages(gid, myUserId: myId);
+      for (final m in msgs) {
+        await store.upsertServerMessage(m);
+      }
+    } catch (_) {}
+  }
+
+  void _openGroupInfo() {
+    final gid = _groupId;
+    if (gid == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => GroupInfoScreen(groupId: gid, title: widget.title, isLeft: _leftGroup),
+      ),
+    );
   }
 
   /// Clear stale "unable to decrypt" rows, then reconcile. With the multi-device
@@ -455,6 +559,23 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       await ref.read(messageStoreProvider).setDisappearing(convId, wire.timerSeconds);
       return;
     }
+    if (wire.isReaction) {
+      final tid = wire.reactionTargetId;
+      if (tid != null) {
+        final store = ref.read(messageStoreProvider);
+        if (wire.reactionAdd && wire.reactionEmoji != null) {
+          await store.setReaction(
+            conversationId: convId,
+            targetId: tid,
+            reactorUserId: senderId,
+            emoji: wire.reactionEmoji!,
+          );
+        } else {
+          await store.removeReaction(targetId: tid, reactorUserId: senderId);
+        }
+      }
+      return;
+    }
 
     final now = DateTime.now();
     await ref.read(messageStoreProvider).upsertServerMessage(
@@ -478,6 +599,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
         mediaSize: wire.mediaSize,
         mediaDurationMs: wire.mediaDurationMs,
         mediaWaveform: wire.mediaWaveform,
+        replyToId: wire.replyToId,
+        replySender: wire.replySender,
+        replyPreview: wire.replyPreview,
+        replyMediaType: wire.replyMediaType,
       ),
     );
 
@@ -630,6 +755,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     _typingKeepAlive?.cancel();
     _realtimeSub?.cancel();
     _messagesSub?.cancel();
+    _reactionsSub?.cancel();
+    _leftSub?.cancel();
     _disappearingSub?.cancel();
     _expirySweeper?.cancel();
 
@@ -699,6 +826,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       if (grew) _scrollToBottom();
       _sendReadReceiptsForLoaded();
     });
+
+    final myId = ref.read(sessionProvider).userId;
+    if (myId != null) {
+      _reactionsSub?.cancel();
+      _reactionsSub =
+          ref.read(messageStoreProvider).watchReactions(convId, myId).listen((map) {
+        if (mounted) setState(() => _reactions = map);
+      });
+    }
   }
 
   /// Pull the recent window from the server into the local store. The UI
@@ -741,8 +877,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     final ttl = _disappearingSeconds;
     final expiresAt = ttl > 0 ? now.add(Duration(seconds: ttl)) : null;
 
+    final reply = _replyingTo;
+    final replyId = reply?.id;
+    final replySender = reply == null ? null : _replySenderLabel(reply);
+    final replyPreview = reply == null ? null : _previewFor(reply);
+    final replyMediaType = reply?.mediaType;
+
     _input.clear();
     if (_viewOnceNext) setState(() => _viewOnceNext = false);
+    _clearReply();
     if (_typingEnabled) {
       ref.read(chatRepositoryProvider).sendTyping(conversationId: _conversationId!, isTyping: false).catchError((_) {});
     }
@@ -758,6 +901,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       createdAt: now,
       viewOnce: viewOnce,
       expiresAt: expiresAt,
+      replyToId: replyId,
+      replySender: replySender,
+      replyPreview: replyPreview,
+      replyMediaType: replyMediaType,
     );
     await ref.read(chatRepositoryProvider).outbox.add(OutboxEntry(
           clientMessageId: cmid,
@@ -769,22 +916,33 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           groupId: _isGroup ? _groupId : null,
           viewOnce: viewOnce,
           ttlSeconds: ttl,
+          replyToId: replyId,
+          replySender: replySender,
+          replyPreview: replyPreview,
+          replyMediaType: replyMediaType,
         ));
 
-    await _trySend(cmid, text, viewOnce: viewOnce, ttlSeconds: ttl);
+    await _trySend(cmid, text,
+        viewOnce: viewOnce,
+        ttlSeconds: ttl,
+        reply: replyId == null
+            ? null
+            : WireReply(
+                id: replyId, sender: replySender, preview: replyPreview, mediaType: replyMediaType));
   }
 
-  Future<void> _trySend(String cmid, String text, {bool viewOnce = false, int ttlSeconds = 0}) async {
+  Future<void> _trySend(String cmid, String text,
+      {bool viewOnce = false, int ttlSeconds = 0, WireReply? reply}) async {
     final repo = ref.read(chatRepositoryProvider);
     final store = ref.read(messageStoreProvider);
     try {
       String envelopeId;
       if (_isGroup && _groupId != null) {
         envelopeId = await repo.sendGroupMessage(
-            groupId: _groupId!, plaintext: text, clientMessageId: cmid, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
+            groupId: _groupId!, plaintext: text, clientMessageId: cmid, viewOnce: viewOnce, ttlSeconds: ttlSeconds, reply: reply);
       } else if (_peerUserId != null) {
         envelopeId = await repo.sendMessage(
-            recipientUserId: _peerUserId!, plaintext: text, clientMessageId: cmid, viewOnce: viewOnce, ttlSeconds: ttlSeconds);
+            recipientUserId: _peerUserId!, plaintext: text, clientMessageId: cmid, viewOnce: viewOnce, ttlSeconds: ttlSeconds, reply: reply);
       } else {
         return;
       }
@@ -795,6 +953,210 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       // retry. It will also auto-retry on the next reconnect/app launch.
       await store.markFailed(cmid, true);
     }
+  }
+
+  /// Builds a WireReply from a persisted message's reply fields (for retries).
+  WireReply? _replyFromMessage(ChatMessage m) => m.replyToId == null
+      ? null
+      : WireReply(
+          id: m.replyToId!,
+          sender: m.replySender,
+          preview: m.replyPreview,
+          mediaType: m.replyMediaType,
+        );
+
+  /// Short preview text for a quoted message (used in the reply banner/bubble).
+  String _previewFor(ChatMessage m) {
+    if (m.isImage) return '📷 Photo';
+    if (m.isVoice) return '🎤 Voice note';
+    if (m.isFile) return '📄 ${m.mediaFilename ?? 'File'}';
+    if (m.viewOnce) return 'View once';
+    return m.text;
+  }
+
+  String _replySenderLabel(ChatMessage m) {
+    if (m.isMine) return 'You';
+    return m.senderLabel ?? widget.title;
+  }
+
+  void _startReply(ChatMessage m) {
+    setState(() => _replyingTo = m);
+  }
+
+  void _clearReply() {
+    if (_replyingTo != null) setState(() => _replyingTo = null);
+  }
+
+  static const List<String> _quickEmojis = ['❤️', '😂', '👍', '😮', '😢', '🙏'];
+
+  static const List<String> _emojiPickerSet = [
+    '❤️', '😂', '👍', '👎', '😮', '😢', '🙏', '🔥',
+    '😍', '😅', '😊', '😉', '😎', '🤔', '😴', '😭',
+    '😡', '🥳', '🤯', '😱', '🤗', '🙄', '😬', '😇',
+    '👏', '🙌', '💪', '✌️', '🤞', '👌', '🤝', '🫶',
+    '💯', '✨', '🎉', '🎈', '💔', '💖', '⭐', '🌟',
+    '😘', '😋', '🤤', '🤐', '🤫', '😜', '🤪', '😏',
+    '🥺', '😤', '😩', '😢', '🤧', '🤒', '👀', '💀',
+  ];
+
+  Future<void> _toggleReaction(ChatMessage m, String emoji) async {
+    if (!m.confirmedOnServer || _conversationId == null) return;
+    final myId = ref.read(sessionProvider).userId!;
+    final store = ref.read(messageStoreProvider);
+    final repo = ref.read(chatRepositoryProvider);
+
+    ReactionView? mine;
+    for (final r in _reactions[m.id] ?? const <ReactionView>[]) {
+      if (r.isMine) {
+        mine = r;
+        break;
+      }
+    }
+    final removing = mine != null && mine.emoji == emoji;
+
+    if (removing) {
+      await store.removeReaction(targetId: m.id, reactorUserId: myId);
+    } else {
+      await store.setReaction(
+          conversationId: _conversationId!, targetId: m.id, reactorUserId: myId, emoji: emoji);
+    }
+
+    try {
+      if (_isGroup && _groupId != null) {
+        await repo.sendGroupReaction(groupId: _groupId!, targetId: m.id, emoji: emoji, add: !removing);
+      } else if (_peerUserId != null) {
+        await repo.sendDmReaction(recipientUserId: _peerUserId!, targetId: m.id, emoji: emoji, add: !removing);
+      }
+    } catch (_) {
+      // Local reaction already applied; the control will re-send on reconnect
+      // is out of scope, but the UX stays responsive.
+    }
+  }
+
+  Future<void> _showMessageMenu(ChatMessage m) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (m.confirmedOnServer)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    for (final e in _quickEmojis)
+                      InkWell(
+                        borderRadius: BorderRadius.circular(24),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _toggleReaction(m, e);
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Text(e, style: const TextStyle(fontSize: 26)),
+                        ),
+                      ),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(24),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _showEmojiPicker(m);
+                      },
+                      child: const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: Icon(Icons.add_circle_outline, size: 28),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.reply),
+              title: const Text('Reply'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _startReply(m);
+              },
+            ),
+            if (!m.isMedia && m.text.isNotEmpty && !m.viewOnce)
+              ListTile(
+                leading: const Icon(Icons.copy_outlined),
+                title: const Text('Copy'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Clipboard.setData(ClipboardData(text: m.text));
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('Copied')));
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showEmojiPicker(ChatMessage m) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: SizedBox(
+          height: 320,
+          child: GridView.count(
+            crossAxisCount: 8,
+            padding: const EdgeInsets.all(12),
+            children: [
+              for (final e in _emojiPickerSet)
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _toggleReaction(m, e);
+                  },
+                  child: Center(child: Text(e, style: const TextStyle(fontSize: 24))),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Scrolls to and briefly highlights the quoted original message.
+  void _scrollToMessage(String? targetId) {
+    if (targetId == null) return;
+    final idx = _messages.indexWhere((m) => m.id == targetId);
+    if (idx < 0) return;
+    setState(() => _highlightedId = targetId);
+    // Approximate scroll: jump near the index by fraction of the list.
+    final pos = _scrollController.position;
+    final target = (idx / _messages.length) * pos.maxScrollExtent;
+    _scrollController.animateTo(
+      target.clamp(0.0, pos.maxScrollExtent),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+    Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _highlightedId = null);
+    });
+  }
+
+  /// Snapshots the active reply (for media sends), then clears the composer.
+  ({String? id, String? sender, String? preview, String? mtype, WireReply? wire}) _consumeReply() {
+    final r = _replyingTo;
+    if (r == null) return (id: null, sender: null, preview: null, mtype: null, wire: null);
+    final sender = _replySenderLabel(r);
+    final preview = _previewFor(r);
+    _clearReply();
+    return (
+      id: r.id,
+      sender: sender,
+      preview: preview,
+      mtype: r.mediaType,
+      wire: WireReply(id: r.id, sender: sender, preview: preview, mediaType: r.mediaType),
+    );
   }
 
   /// Manual retry from the failed-message UI.
@@ -816,7 +1178,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
         height: m.mediaHeight ?? 0,
       );
       await _trySendImage(m.clientMessageId!, picked,
-          caption: m.text, viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0);
+          caption: m.text, viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0, reply: _replyFromMessage(m));
       return;
     }
     if (m.isFile) {
@@ -833,7 +1195,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
         size: bytes.length,
       );
       await _trySendFile(m.clientMessageId!, picked,
-          caption: m.text, viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0);
+          caption: m.text, viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0, reply: _replyFromMessage(m));
       return;
     }
     if (m.isVoice) {
@@ -849,10 +1211,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
         waveform: m.mediaWaveform ?? const [],
         mime: m.mediaMime ?? 'audio/mp4',
       );
-      await _trySendVoice(m.clientMessageId!, voice, ttlSeconds: ttl > 0 ? ttl : 0);
+      await _trySendVoice(m.clientMessageId!, voice, ttlSeconds: ttl > 0 ? ttl : 0, reply: _replyFromMessage(m));
       return;
     }
-    await _trySend(m.clientMessageId!, m.text, viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0);
+    await _trySend(m.clientMessageId!, m.text,
+        viewOnce: m.viewOnce, ttlSeconds: ttl > 0 ? ttl : 0, reply: _replyFromMessage(m));
   }
 
   /// Reveal a one-time-view image once, then consume it (wipe + delete blob).
@@ -866,16 +1229,27 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     if (path == null || !mounted) return;
     await _showFullscreen(path);
     await ref.read(messageStoreProvider).markViewed(m);
+    if (m.confirmedOnServer) ref.read(chatRepositoryProvider).consumeViewOnce(m.id);
     await media.deleteLocal(blobId);
   }
 
   Future<void> _showFullscreen(String path) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => _FullscreenImage(path: path),
-        fullscreenDialog: true,
-      ),
-    );
+    final security = ref.read(screenSecurityProvider);
+    await security.pushSecure();
+    if (!mounted) {
+      await security.restoreSaved();
+      return;
+    }
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => _FullscreenImage(path: path),
+          fullscreenDialog: true,
+        ),
+      );
+    } finally {
+      await security.restoreSaved();
+    }
   }
 
   /// Reveal a one-time-view file once (open it), then consume it.
@@ -894,6 +1268,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     if (path == null || !mounted) return;
     await OpenFilex.open(path, type: m.mediaMime);
     await ref.read(messageStoreProvider).markViewed(m);
+    if (m.confirmedOnServer) ref.read(chatRepositoryProvider).consumeViewOnce(m.id);
     await media.deleteLocal(blobId);
   }
 
@@ -925,6 +1300,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       await player.dispose();
     }
     await ref.read(messageStoreProvider).markViewed(m);
+    if (m.confirmedOnServer) ref.read(chatRepositoryProvider).consumeViewOnce(m.id);
     await media.deleteLocal(blobId);
   }
 
@@ -1029,6 +1405,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     final ttl = _disappearingSeconds;
     final expiresAt = ttl > 0 ? now.add(Duration(seconds: ttl)) : null;
+    final rep = _consumeReply();
 
     String? localPath;
     try {
@@ -1053,13 +1430,18 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       mediaLocalPath: localPath,
       mediaFilename: picked.filename,
       mediaSize: picked.size,
+      replyToId: rep.id,
+      replySender: rep.sender,
+      replyPreview: rep.preview,
+      replyMediaType: rep.mtype,
     );
 
-    await _trySendFile(cmid, picked, caption: caption, viewOnce: viewOnce, ttlSeconds: ttl);
+    await _trySendFile(cmid, picked,
+        caption: caption, viewOnce: viewOnce, ttlSeconds: ttl, reply: rep.wire);
   }
 
   Future<void> _trySendFile(String cmid, PickedFile picked,
-      {String caption = '', bool viewOnce = false, int ttlSeconds = 0}) async {
+      {String caption = '', bool viewOnce = false, int ttlSeconds = 0, WireReply? reply}) async {
     final repo = ref.read(chatRepositoryProvider);
     final store = ref.read(messageStoreProvider);
     final media = ref.read(mediaServiceProvider);
@@ -1086,6 +1468,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           clientMessageId: cmid,
           viewOnce: viewOnce,
           ttlSeconds: ttlSeconds,
+          reply: reply,
         );
       } else if (_peerUserId != null) {
         envelopeId = await repo.sendDmFile(
@@ -1099,6 +1482,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           clientMessageId: cmid,
           viewOnce: viewOnce,
           ttlSeconds: ttlSeconds,
+          reply: reply,
         );
       } else {
         return;
@@ -1121,6 +1505,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     final ttl = _disappearingSeconds;
     final expiresAt = ttl > 0 ? now.add(Duration(seconds: ttl)) : null;
+    final rep = _consumeReply();
 
     // Show the image instantly on the sender side by caching a local copy keyed
     // by the client message id (before we know the server blob id).
@@ -1142,13 +1527,18 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       mediaWidth: picked.width,
       mediaHeight: picked.height,
       mediaLocalPath: localPath,
+      replyToId: rep.id,
+      replySender: rep.sender,
+      replyPreview: rep.preview,
+      replyMediaType: rep.mtype,
     );
 
-    await _trySendImage(cmid, picked, caption: caption, viewOnce: viewOnce, ttlSeconds: ttl);
+    await _trySendImage(cmid, picked,
+        caption: caption, viewOnce: viewOnce, ttlSeconds: ttl, reply: rep.wire);
   }
 
   Future<void> _trySendImage(String cmid, PickedImage picked,
-      {String caption = '', bool viewOnce = false, int ttlSeconds = 0}) async {
+      {String caption = '', bool viewOnce = false, int ttlSeconds = 0, WireReply? reply}) async {
     final repo = ref.read(chatRepositoryProvider);
     final store = ref.read(messageStoreProvider);
     final media = ref.read(mediaServiceProvider);
@@ -1176,6 +1566,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           clientMessageId: cmid,
           viewOnce: viewOnce,
           ttlSeconds: ttlSeconds,
+          reply: reply,
         );
       } else if (_peerUserId != null) {
         envelopeId = await repo.sendDmImage(
@@ -1190,6 +1581,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           clientMessageId: cmid,
           viewOnce: viewOnce,
           ttlSeconds: ttlSeconds,
+          reply: reply,
         );
       } else {
         return;
@@ -1287,6 +1679,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
     final ttl = _disappearingSeconds;
     final expiresAt = ttl > 0 ? now.add(Duration(seconds: ttl)) : null;
+    final rep = _consumeReply();
 
     String? localPath;
     try {
@@ -1311,12 +1704,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       mediaSize: voice.bytes.length,
       mediaDurationMs: voice.durationMs,
       mediaWaveform: voice.waveform,
+      replyToId: rep.id,
+      replySender: rep.sender,
+      replyPreview: rep.preview,
+      replyMediaType: rep.mtype,
     );
 
-    await _trySendVoice(cmid, voice, ttlSeconds: ttl);
+    await _trySendVoice(cmid, voice, ttlSeconds: ttl, reply: rep.wire);
   }
 
-  Future<void> _trySendVoice(String cmid, RecordedVoice voice, {int ttlSeconds = 0}) async {
+  Future<void> _trySendVoice(String cmid, RecordedVoice voice,
+      {int ttlSeconds = 0, WireReply? reply}) async {
     final repo = ref.read(chatRepositoryProvider);
     final store = ref.read(messageStoreProvider);
     final media = ref.read(mediaServiceProvider);
@@ -1342,6 +1740,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           size: uploaded.size,
           clientMessageId: cmid,
           ttlSeconds: ttlSeconds,
+          reply: reply,
         );
       } else if (_peerUserId != null) {
         envelopeId = await repo.sendDmVoice(
@@ -1354,6 +1753,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
           size: uploaded.size,
           clientMessageId: cmid,
           ttlSeconds: ttlSeconds,
+          reply: reply,
         );
       } else {
         return;
@@ -1432,19 +1832,30 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       return;
     }
     final body = m.text;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [Icon(Icons.visibility_off_outlined, size: 18), Gap(8), Text('View once')],
+    final security = ref.read(screenSecurityProvider);
+    await security.pushSecure();
+    if (!mounted) {
+      await security.restoreSaved();
+      return;
+    }
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Row(
+            children: [Icon(Icons.visibility_off_outlined, size: 18), Gap(8), Text('View once')],
+          ),
+          content: Text(body),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          ],
         ),
-        content: Text(body),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-        ],
-      ),
-    );
+      );
+    } finally {
+      await security.restoreSaved();
+    }
     await ref.read(messageStoreProvider).markViewed(m);
+    if (m.confirmedOnServer) ref.read(chatRepositoryProvider).consumeViewOnce(m.id);
   }
 
   Future<void> _pickDisappearingTimer() async {
@@ -1656,13 +2067,31 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
       appBar: AppBar(
 
-        title: Column(
+        title: InkWell(
+
+          onTap: (_isGroup && _groupId != null) ? _openGroupInfo : null,
+
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_isGroup) ...[
+                GroupAvatar(
+                  title: widget.title,
+                  blobId: _groupAvatarBlobId,
+                  avatarKey: _groupAvatarKey,
+                  radius: 18,
+                ),
+                const Gap(10),
+              ],
+              Flexible(
+                child: Column(
 
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
 
           children: [
 
-            Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
 
             // Whether we SEE the peer typing depends only on whether they chose
             // to broadcast it — never on our own typing-privacy toggle.
@@ -1676,9 +2105,14 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
             else if (_isGroup)
 
-              Text('Group · E2EE', style: Theme.of(context).textTheme.labelSmall),
+              Text('Group · E2EE · tap for info', style: Theme.of(context).textTheme.labelSmall),
 
           ],
+
+                ),
+              ),
+            ],
+          ),
 
         ),
 
@@ -1817,17 +2251,34 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
                                 final m = _messages[i];
 
+                                if (m.senderUserId == kSystemSenderId) {
+                                  return _SystemNotice(text: m.text);
+                                }
+
                                 final cmid = m.clientMessageId;
                                 final progress = cmid != null ? _uploadProgress[cmid] : null;
-                                return _Bubble(
-                                  message: m,
-                                  primary: primary,
-                                  showSender: _isGroup && !m.isMine,
-                                  uploadProgress: progress,
-                                  onRetry: m.sendFailed ? () => _retry(m) : null,
-                                  onViewOnce: (m.viewOnce && !m.isMine && !m.viewed)
-                                      ? () => _openViewOnce(m)
-                                      : null,
+                                return GestureDetector(
+                                  behavior: HitTestBehavior.translucent,
+                                  onLongPress: _leftGroup ? null : () => _showMessageMenu(m),
+                                  onHorizontalDragEnd: _leftGroup
+                                      ? null
+                                      : (d) {
+                                          if ((d.primaryVelocity ?? 0) > 220) _startReply(m);
+                                        },
+                                  child: _Bubble(
+                                    message: m,
+                                    primary: primary,
+                                    showSender: _isGroup && !m.isMine,
+                                    uploadProgress: progress,
+                                    highlighted: _highlightedId != null && m.id == _highlightedId,
+                                    reactions: _reactions[m.id] ?? const [],
+                                    onReact: _leftGroup ? null : (e) => _toggleReaction(m, e),
+                                    onQuoteTap: m.isReply ? () => _scrollToMessage(m.replyToId) : null,
+                                    onRetry: m.sendFailed ? () => _retry(m) : null,
+                                    onViewOnce: (m.viewOnce && !m.isMine && !m.viewed)
+                                        ? () => _openViewOnce(m)
+                                        : null,
+                                  ),
                                 );
 
                               },
@@ -1892,6 +2343,59 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
                       padding: const EdgeInsets.all(4),
                       child: Icon(Icons.close, size: 16, color: primary),
                     ),
+                  ),
+                ],
+              ),
+            ),
+
+          if (_leftGroup)
+            SafeArea(
+              child: Container(
+                width: double.infinity,
+                color: const Color(0xFFF0F2F5),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                child: const Text(
+                  "You can't send messages to this group because you're no longer a member.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+                ),
+              ),
+            )
+          else ...[
+            if (_replyingTo != null)
+            Container(
+              width: double.infinity,
+              color: primary.withValues(alpha: 0.08),
+              padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+              child: Row(
+                children: [
+                  Container(width: 3, height: 34, color: primary),
+                  const Gap(8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Replying to ${_replySenderLabel(_replyingTo!)}',
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: primary, fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          _previewFor(_replyingTo!),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _clearReply,
+                    icon: const Icon(Icons.close, size: 18),
                   ),
                 ],
               ),
@@ -1977,6 +2481,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
           ),
 
+          ],
+
         ],
 
       ),
@@ -2029,7 +2535,18 @@ class _TypingIndicatorState extends State<_TypingIndicator> {
 
 class _Bubble extends StatelessWidget {
 
-  const _Bubble({required this.message, required this.primary, this.showSender = false, this.uploadProgress, this.onRetry, this.onViewOnce});
+  const _Bubble({
+    required this.message,
+    required this.primary,
+    this.showSender = false,
+    this.uploadProgress,
+    this.highlighted = false,
+    this.reactions = const [],
+    this.onReact,
+    this.onQuoteTap,
+    this.onRetry,
+    this.onViewOnce,
+  });
 
 
 
@@ -2041,6 +2558,18 @@ class _Bubble extends StatelessWidget {
 
   /// Active upload progress (0..1) for an outgoing media message, or null.
   final double? uploadProgress;
+
+  /// Briefly highlighted (after a quote tap scrolled here).
+  final bool highlighted;
+
+  /// Reactions on this message (for the chips below the bubble).
+  final List<ReactionView> reactions;
+
+  /// Tapping a reaction chip toggles that emoji.
+  final void Function(String emoji)? onReact;
+
+  /// Tapping the quoted block scrolls to the original message.
+  final VoidCallback? onQuoteTap;
 
   final VoidCallback? onRetry;
 
@@ -2109,14 +2638,76 @@ class _Bubble extends StatelessWidget {
       );
 
     final tap = (message.sendFailed && onRetry != null) ? onRetry : onViewOnce;
+    Widget bubbleChild = tap != null ? GestureDetector(onTap: tap, child: bubble) : bubble;
+    if (highlighted) {
+      bubbleChild = AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        decoration: BoxDecoration(
+          color: primary.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: bubbleChild,
+      );
+    }
+
+    final chips = _reactionChips(context);
     return Align(
-
       alignment: message.isMine ? Alignment.centerRight : Alignment.centerLeft,
-
-      child: tap != null ? GestureDetector(onTap: tap, child: bubble) : bubble,
-
+      child: Column(
+        crossAxisAlignment:
+            message.isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          bubbleChild,
+          if (chips != null) chips,
+        ],
+      ),
     );
+  }
 
+  Widget? _reactionChips(BuildContext context) {
+    if (reactions.isEmpty) return null;
+    final counts = <String, int>{};
+    final mineSet = <String>{};
+    for (final r in reactions) {
+      counts[r.emoji] = (counts[r.emoji] ?? 0) + 1;
+      if (r.isMine) mineSet.add(r.emoji);
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Wrap(
+        spacing: 4,
+        children: [
+          for (final e in counts.entries)
+            GestureDetector(
+              onTap: onReact == null ? null : () => onReact!(e.key),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: mineSet.contains(e.key)
+                      ? primary.withValues(alpha: 0.15)
+                      : Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: mineSet.contains(e.key) ? primary : Theme.of(context).dividerColor,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(e.key, style: const TextStyle(fontSize: 13)),
+                    if (e.value > 1) ...[
+                      const Gap(3),
+                      Text('${e.value}',
+                          style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   /// Renders the bubble body. A one-time-view message is hidden on BOTH ends —
@@ -2138,6 +2729,7 @@ class _Bubble extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (message.isReply) _quoteBlock(context, onColor),
         if (message.isImage) _ChatImage(message: message, uploadProgress: uploadProgress),
         if (message.isFile)
           _ChatFile(message: message, onColor: onColor, uploadProgress: uploadProgress),
@@ -2151,6 +2743,43 @@ class _Bubble extends StatelessWidget {
         if (!message.isMedia)
           Text(message.text, style: TextStyle(color: onColor, height: 1.35)),
       ],
+    );
+  }
+
+  Widget _quoteBlock(BuildContext context, Color onColor) {
+    final accent = message.isMine ? Colors.white : primary;
+    final bg = message.isMine
+        ? Colors.white.withValues(alpha: 0.18)
+        : primary.withValues(alpha: 0.08);
+    return GestureDetector(
+      onTap: onQuoteTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border(left: BorderSide(color: accent, width: 3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message.replySender ?? 'Reply',
+              style: TextStyle(
+                  color: onColor, fontWeight: FontWeight.w600, fontSize: 12),
+            ),
+            const Gap(2),
+            Text(
+              message.replyPreview ?? '',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: onColor.withValues(alpha: 0.85), fontSize: 12),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2732,6 +3361,34 @@ class _ChatFileState extends ConsumerState<_ChatFile> {
             else
               Icon(hasLocal ? Icons.open_in_new : Icons.download_rounded, color: onColor),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Centered grey notice for group lifecycle lines ("X added Y", "Y left").
+class _SystemNotice extends StatelessWidget {
+  const _SystemNotice({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFE9EDF2),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF52606D)),
+          ),
         ),
       ),
     );

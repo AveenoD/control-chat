@@ -33,6 +33,15 @@ class ScreenSecurityService {
     await _setNative(enabled);
   }
 
+  /// Force `FLAG_SECURE` on regardless of the saved preference. Used while a
+  /// view-once message is revealed so it can never be screenshotted/recorded,
+  /// even if the user has globally disabled screen security.
+  Future<void> pushSecure() => _setNative(true);
+
+  /// Restore the user's saved screen-security preference (call after a forced
+  /// secure window closes).
+  Future<void> restoreSaved() => applySaved();
+
   Future<void> _setNative(bool enabled) async {
     try {
       await _channel.invokeMethod<void>('setSecure', {'enabled': enabled});

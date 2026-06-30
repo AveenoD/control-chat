@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../chat/chat_models.dart';
+import '../chat/conversation_id.dart';
 import 'app_database.dart';
 
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
@@ -63,6 +64,10 @@ class MessageStore {
         mediaSize: r.mediaSize,
         mediaDurationMs: r.mediaDurationMs,
         mediaWaveform: _parseWaveform(r.mediaWaveform),
+        replyToId: r.replyToId,
+        replySender: r.replySender,
+        replyPreview: r.replyPreview,
+        replyMediaType: r.replyMediaType,
       );
 
   /// Reactive stream of a conversation's messages, oldest → newest.
@@ -94,13 +99,19 @@ class MessageStore {
   /// Insert/update a confirmed (server-side) message. Preserves delivery/read
   /// flags and never overwrites a good decryption with a failure sentinel.
   Future<void> upsertServerMessage(ChatMessage m) async {
-    final existing = await _findByServerOrClient(m.id, m.clientMessageId);
-    if (existing == null) {
-      // A disappearing message that already expired before we ever stored it
-      // (e.g. re-syncing an old window) should not flash back into the UI.
-      final exp = m.expiresAt;
-      if (exp != null && exp.isBefore(DateTime.now())) return;
-      await _db.into(_db.messages).insert(
+    // Run the find-then-write atomically. Multiple concurrent ingesters (the
+    // app-global incoming handler, the thread's sync, a realtime push) can race
+    // on the same message; without a transaction each would read "not found"
+    // and insert, producing duplicates. The transaction serialises them so the
+    // second caller sees the first insert and updates instead.
+    await _db.transaction(() async {
+      final existing = await _findByServerOrClient(m.id, m.clientMessageId);
+      if (existing == null) {
+        // A disappearing message that already expired before we ever stored it
+        // (e.g. re-syncing an old window) should not flash back into the UI.
+        final exp = m.expiresAt;
+        if (exp != null && exp.isBefore(DateTime.now())) return;
+        await _db.into(_db.messages).insert(
             MessagesCompanion.insert(
               serverId: Value(m.id),
               clientMessageId: Value(m.clientMessageId),
@@ -125,6 +136,10 @@ class MessageStore {
               mediaSize: Value(m.mediaSize),
               mediaDurationMs: Value(m.mediaDurationMs),
               mediaWaveform: Value(_waveformToString(m.mediaWaveform)),
+              replyToId: Value(m.replyToId),
+              replySender: Value(m.replySender),
+              replyPreview: Value(m.replyPreview),
+              replyMediaType: Value(m.replyMediaType),
             ),
           );
       return;
@@ -159,8 +174,13 @@ class MessageStore {
         mediaSize: Value(m.mediaSize ?? existing.mediaSize),
         mediaDurationMs: Value(m.mediaDurationMs ?? existing.mediaDurationMs),
         mediaWaveform: Value(_waveformToString(m.mediaWaveform) ?? existing.mediaWaveform),
+        replyToId: Value(m.replyToId ?? existing.replyToId),
+        replySender: Value(m.replySender ?? existing.replySender),
+        replyPreview: Value(m.replyPreview ?? existing.replyPreview),
+        replyMediaType: Value(m.replyMediaType ?? existing.replyMediaType),
       ),
     );
+    });
   }
 
   Future<void> upsertMany(List<ChatMessage> messages) async {
@@ -187,6 +207,10 @@ class MessageStore {
     int? mediaSize,
     int? mediaDurationMs,
     List<int>? mediaWaveform,
+    String? replyToId,
+    String? replySender,
+    String? replyPreview,
+    String? replyMediaType,
   }) async {
     final existing = await _findByServerOrClient(null, clientMessageId);
     if (existing != null) return;
@@ -209,6 +233,10 @@ class MessageStore {
             mediaSize: Value(mediaSize),
             mediaDurationMs: Value(mediaDurationMs),
             mediaWaveform: Value(_waveformToString(mediaWaveform)),
+            replyToId: Value(replyToId),
+            replySender: Value(replySender),
+            replyPreview: Value(replyPreview),
+            replyMediaType: Value(replyMediaType),
           ),
         );
   }
@@ -352,9 +380,103 @@ class MessageStore {
         ),
         lastAt: DateTime.fromMillisecondsSinceEpoch(r.lastAt),
         lastPreview: r.lastPreview,
-        isGroup: r.isGroup,
-        groupId: r.groupId,
+        // Source of truth is the id prefix — never trust a possibly-stale flag,
+        // so a "group:" conversation is always treated as a group.
+        isGroup: isGroupConversation(r.conversationId) || r.isGroup,
+        groupId: r.groupId ?? groupIdFromConversation(r.conversationId),
+        leftGroup: r.leftGroup,
+        avatarBlobId: r.avatarBlobId,
+        avatarKey: r.avatarKey,
       );
+
+  /// Mark a group conversation as left (read-only). The row is preserved so the
+  /// chat stays in the list instead of disappearing.
+  Future<void> markGroupLeft(String conversationId) async {
+    final affected = await (_db.update(_db.conversations)
+          ..where((t) => t.conversationId.equals(conversationId)))
+        .write(const ConversationsCompanion(leftGroup: Value(true)));
+    // If no row exists yet (group seen only via realtime), create a minimal one
+    // so the flag persists and the chat stays in the list.
+    if (affected == 0) {
+      await _db.into(_db.conversations).insert(
+            ConversationsCompanion.insert(
+              conversationId: conversationId,
+              isGroup: const Value(true),
+              groupId: Value(groupIdFromConversation(conversationId)),
+              lastAt: DateTime.now().millisecondsSinceEpoch,
+              leftGroup: const Value(true),
+            ),
+            mode: InsertMode.insertOrReplace,
+          );
+    }
+  }
+
+  /// Reflect a just-set group avatar locally (instant, before the next
+  /// /conversations sync). Creates a minimal row if none exists yet.
+  Future<void> setGroupAvatarLocal(
+    String conversationId,
+    String? blobId,
+    String? key,
+  ) async {
+    final affected = await (_db.update(_db.conversations)
+          ..where((t) => t.conversationId.equals(conversationId)))
+        .write(ConversationsCompanion(
+          avatarBlobId: Value(blobId),
+          avatarKey: Value(key),
+        ));
+    if (affected == 0) {
+      await _db.into(_db.conversations).insert(
+            ConversationsCompanion.insert(
+              conversationId: conversationId,
+              isGroup: const Value(true),
+              groupId: Value(groupIdFromConversation(conversationId)),
+              lastAt: DateTime.now().millisecondsSinceEpoch,
+              avatarBlobId: Value(blobId),
+              avatarKey: Value(key),
+            ),
+            mode: InsertMode.insertOrReplace,
+          );
+    }
+  }
+
+  Future<void> markGroupRejoined(String conversationId) async {
+    await (_db.update(_db.conversations)
+          ..where((t) => t.conversationId.equals(conversationId)))
+        .write(const ConversationsCompanion(leftGroup: Value(false)));
+  }
+
+  Future<bool> isGroupLeft(String conversationId) async {
+    final row = await (_db.select(_db.conversations)
+          ..where((t) => t.conversationId.equals(conversationId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.leftGroup ?? false;
+  }
+
+  Stream<bool> watchGroupLeft(String conversationId) {
+    final q = _db.select(_db.conversations)
+      ..where((t) => t.conversationId.equals(conversationId))
+      ..limit(1);
+    return q.watch().map((rows) => rows.isNotEmpty && rows.first.leftGroup);
+  }
+
+  /// Fully remove a conversation locally (row + messages + reactions + settings).
+  Future<void> deleteConversation(String conversationId) async {
+    await _db.transaction(() async {
+      await (_db.delete(_db.messages)
+            ..where((t) => t.conversationId.equals(conversationId)))
+          .go();
+      await (_db.delete(_db.messageReactions)
+            ..where((t) => t.conversationId.equals(conversationId)))
+          .go();
+      await (_db.delete(_db.conversationSettings)
+            ..where((t) => t.conversationId.equals(conversationId)))
+          .go();
+      await (_db.delete(_db.conversations)
+            ..where((t) => t.conversationId.equals(conversationId)))
+          .go();
+    });
+  }
 
   Future<void> upsertConversations(List<ConversationSummary> list) async {
     await _db.batch((b) {
@@ -370,6 +492,8 @@ class MessageStore {
             groupId: Value(c.groupId),
             lastAt: c.lastAt.millisecondsSinceEpoch,
             lastPreview: Value(c.lastPreview),
+            avatarBlobId: Value(c.avatarBlobId),
+            avatarKey: Value(c.avatarKey),
           ),
           onConflict: DoUpdate(
             (_) => ConversationsCompanion(
@@ -380,6 +504,11 @@ class MessageStore {
               groupId: Value(c.groupId),
               lastAt: Value(c.lastAt.millisecondsSinceEpoch),
               lastPreview: Value(c.lastPreview),
+              avatarBlobId: Value(c.avatarBlobId),
+              avatarKey: Value(c.avatarKey),
+              // Server only returns groups we're still in → clear any stale
+              // "left" flag (covers re-join).
+              leftGroup: const Value(false),
             ),
           ),
         );
@@ -387,10 +516,61 @@ class MessageStore {
     });
   }
 
+  // ---- Reactions ----
+
+  /// Reactive map of targetMessageId -> its reactions for a conversation.
+  Stream<Map<String, List<ReactionView>>> watchReactions(
+    String conversationId,
+    String myUserId,
+  ) {
+    final q = _db.select(_db.messageReactions)
+      ..where((t) => t.conversationId.equals(conversationId));
+    return q.watch().map((rows) {
+      final map = <String, List<ReactionView>>{};
+      for (final r in rows) {
+        (map[r.targetId] ??= []).add(ReactionView(
+          targetId: r.targetId,
+          reactorUserId: r.reactorUserId,
+          emoji: r.emoji,
+          isMine: r.reactorUserId == myUserId,
+        ));
+      }
+      return map;
+    });
+  }
+
+  /// Add/replace a user's reaction on a message (one emoji per user).
+  Future<void> setReaction({
+    required String conversationId,
+    required String targetId,
+    required String reactorUserId,
+    required String emoji,
+  }) async {
+    await _db.into(_db.messageReactions).insertOnConflictUpdate(
+          MessageReactionsCompanion.insert(
+            targetId: targetId,
+            conversationId: conversationId,
+            reactorUserId: reactorUserId,
+            emoji: emoji,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+  }
+
+  Future<void> removeReaction({
+    required String targetId,
+    required String reactorUserId,
+  }) async {
+    await (_db.delete(_db.messageReactions)
+          ..where((t) => t.targetId.equals(targetId) & t.reactorUserId.equals(reactorUserId)))
+        .go();
+  }
+
   Future<void> clearAll() async {
     await _db.delete(_db.messages).go();
     await _db.delete(_db.conversations).go();
     await _db.delete(_db.callHistoryItems).go();
     await _db.delete(_db.conversationSettings).go();
+    await _db.delete(_db.messageReactions).go();
   }
 }

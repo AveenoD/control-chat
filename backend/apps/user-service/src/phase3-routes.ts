@@ -81,6 +81,83 @@ async function listUserDevices(db: Db, userId: string): Promise<Array<{ userId: 
   return res.rows.map((r) => ({ userId, deviceId: r.device_id }));
 }
 
+async function isGroupAdmin(db: Db, groupId: string, userId: string): Promise<boolean> {
+  const res = await db.query(
+    `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2 AND role = 'admin'`,
+    [groupId, userId]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+async function getUserLabel(db: Db, userId: string): Promise<string> {
+  const res = await db.query<{ display_name: string | null; username: string | null }>(
+    `SELECT display_name, username FROM users WHERE id = $1 LIMIT 1`,
+    [userId]
+  );
+  const r = res.rows[0];
+  return r?.display_name || r?.username || "Someone";
+}
+
+/**
+ * Records a group membership/lifecycle event as plaintext metadata and fans it
+ * out to every current member device over Centrifugo so clients can render a
+ * timeline system line ("X added Y") in real time. The stored row lets clients
+ * back-fill the same lines on cold open via GET /groups/:id/events.
+ */
+async function emitGroupSystemEvent(
+  db: Db,
+  opts: { centrifugoApiUrl?: string; centrifugoApiKey?: string } | undefined,
+  args: {
+    groupId: string;
+    type: string;
+    actorUserId?: string | null;
+    targetUserId?: string | null;
+    actorName?: string | null;
+    targetName?: string | null;
+    meta?: Record<string, unknown> | null;
+  }
+): Promise<void> {
+  const ins = await db.query<{ id: string; created_at: string }>(
+    `INSERT INTO group_system_events (group_id, type, actor_user_id, target_user_id, meta)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, created_at`,
+    [
+      args.groupId,
+      args.type,
+      args.actorUserId ?? null,
+      args.targetUserId ?? null,
+      args.meta ? JSON.stringify(args.meta) : null
+    ]
+  );
+  const ev = ins.rows[0]!;
+
+  const members = await db.query<{ user_id: string }>(
+    `SELECT user_id FROM group_members WHERE group_id = $1`,
+    [args.groupId]
+  );
+  const targets: Array<{ userId: string; deviceId: string }> = [];
+  for (const m of members.rows) {
+    targets.push(...(await listUserDevices(db, m.user_id)));
+  }
+  await publishCallEvent(
+    { centrifugoApiUrl: opts?.centrifugoApiUrl, centrifugoApiKey: opts?.centrifugoApiKey },
+    targets,
+    {
+      type: "group_event",
+      eventId: ev.id,
+      groupId: args.groupId,
+      conversationId: `group:${args.groupId}`,
+      eventType: args.type,
+      actorUserId: args.actorUserId ?? null,
+      targetUserId: args.targetUserId ?? null,
+      actorName: args.actorName ?? null,
+      targetName: args.targetName ?? null,
+      meta: args.meta ?? null,
+      ts: ev.created_at
+    }
+  );
+}
+
 async function publishCallEvent(
   opts: {
     centrifugoApiUrl?: string;
@@ -258,7 +335,8 @@ export function registerPhase3Routes(
     const userId = req.user.sub as string;
     const res = await db.query(
       `
-      SELECT g.id, g.title, g.created_by, g.created_at,
+      SELECT g.id, g.title, g.created_by, g.created_at, g.current_key_epoch, g.needs_rekey,
+             g.avatar_blob_id, g.avatar_key,
              (SELECT COUNT(*)::int FROM group_members gm2 WHERE gm2.group_id = g.id) AS member_count
       FROM groups g
       JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = $1
@@ -273,6 +351,299 @@ export function registerPhase3Routes(
         conversation_id: `group:${r.id}`
       }))
     };
+  });
+
+  app.get("/groups/:groupId", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    const res = await db.query(
+      `
+      SELECT g.id, g.title, g.created_by, g.created_at, g.current_key_epoch, g.needs_rekey,
+             g.avatar_blob_id, g.avatar_key,
+             (SELECT COUNT(*)::int FROM group_members gm2 WHERE gm2.group_id = g.id) AS member_count,
+             (SELECT role FROM group_members gm3 WHERE gm3.group_id = g.id AND gm3.user_id = $2) AS my_role
+      FROM groups g
+      WHERE g.id = $1
+      `,
+      [params.groupId, userId]
+    );
+    const row = res.rows[0] as any;
+    if (!row || !row.my_role) return reply.code(403).send({ ok: false, error: "Not a member" });
+    return reply.send({ ok: true, group: { ...row, conversation_id: `group:${row.id}` } });
+  });
+
+  app.post("/groups/:groupId/members", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({ memberUsernames: z.array(z.string()).min(1).max(50) })
+      .parse(req.body);
+
+    if (!(await isGroupAdmin(db, params.groupId, userId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+
+    const actorName = await getUserLabel(db, userId);
+    const added: Array<{ userId: string; username: string }> = [];
+    for (const uname of body.memberUsernames) {
+      const id = await resolveUserIdByUsername(db, uname);
+      if (!id) return reply.code(404).send({ ok: false, error: `User not found: ${uname}` });
+      if (await isBlocked(db, userId, id)) {
+        return reply.code(403).send({ ok: false, error: "Cannot add blocked user" });
+      }
+      const existing = await db.query(
+        `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2`,
+        [params.groupId, id]
+      );
+      if ((existing.rowCount ?? 0) > 0) continue;
+      await db.query(
+        `INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`,
+        [params.groupId, id]
+      );
+      const label = await getUserLabel(db, id);
+      added.push({ userId: id, username: label });
+      await emitGroupSystemEvent(db, opts, {
+        groupId: params.groupId,
+        type: "member_added",
+        actorUserId: userId,
+        targetUserId: id,
+        actorName,
+        targetName: label
+      });
+    }
+    return reply.send({ ok: true, added });
+  });
+
+  app.delete("/groups/:groupId/members/:userId", async (req: any, reply: any) => {
+    const requesterId = req.user.sub as string;
+    const params = z
+      .object({ groupId: z.string().uuid(), userId: z.string().uuid() })
+      .parse(req.params);
+    const isSelf = params.userId === requesterId;
+
+    if (!isSelf && !(await isGroupAdmin(db, params.groupId, requesterId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+
+    const target = await db.query<{ role: string }>(
+      `SELECT role FROM group_members WHERE group_id = $1 AND user_id = $2`,
+      [params.groupId, params.userId]
+    );
+    if (target.rowCount === 0) return reply.code(404).send({ ok: false, error: "Not a member" });
+
+    const actorName = await getUserLabel(db, requesterId);
+    const targetName = await getUserLabel(db, params.userId);
+
+    const client = await db.connect();
+    let newEpoch = 1;
+    let emptied = false;
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM group_members WHERE group_id = $1 AND user_id = $2`,
+        [params.groupId, params.userId]
+      );
+      // Removed member must lose access to all future keys.
+      await client.query(
+        `DELETE FROM group_key_envelopes WHERE group_id = $1 AND recipient_user_id = $2`,
+        [params.groupId, params.userId]
+      );
+      const remaining = await client.query<{ user_id: string; role: string }>(
+        `SELECT user_id, role FROM group_members WHERE group_id = $1 ORDER BY joined_at ASC`,
+        [params.groupId]
+      );
+      if (remaining.rowCount === 0) {
+        await client.query(`DELETE FROM groups WHERE id = $1`, [params.groupId]);
+        emptied = true;
+      } else {
+        // Membership change → rotate the shared key: bump epoch + flag so an
+        // admin re-seals a fresh key. The removed device keeps the old epoch key
+        // but never receives the new one, so it can't read future messages.
+        const up = await client.query<{ current_key_epoch: number }>(
+          `UPDATE groups SET current_key_epoch = current_key_epoch + 1, needs_rekey = true, updated_at = now() WHERE id = $1 RETURNING current_key_epoch`,
+          [params.groupId]
+        );
+        newEpoch = up.rows[0]!.current_key_epoch;
+        if (!remaining.rows.some((r) => r.role === "admin")) {
+          await client.query(
+            `UPDATE group_members SET role = 'admin' WHERE group_id = $1 AND user_id = $2`,
+            [params.groupId, remaining.rows[0]!.user_id]
+          );
+        }
+      }
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    if (!emptied) {
+      await emitGroupSystemEvent(db, opts, {
+        groupId: params.groupId,
+        type: isSelf ? "member_left" : "member_removed",
+        actorUserId: requesterId,
+        targetUserId: params.userId,
+        actorName,
+        targetName
+      });
+    }
+    return reply.send({ ok: true, currentKeyEpoch: newEpoch, emptied });
+  });
+
+  app.post("/groups/:groupId/rename", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    const body = z.object({ title: z.string().min(1).max(64) }).parse(req.body);
+    if (!(await isGroupAdmin(db, params.groupId, userId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+    await db.query(`UPDATE groups SET title = $2, updated_at = now() WHERE id = $1`, [
+      params.groupId,
+      body.title
+    ]);
+    const actorName = await getUserLabel(db, userId);
+    await emitGroupSystemEvent(db, opts, {
+      groupId: params.groupId,
+      type: "group_renamed",
+      actorUserId: userId,
+      actorName,
+      meta: { title: body.title }
+    });
+    return reply.send({ ok: true });
+  });
+
+  // Set/clear the group avatar (admin only). The image is an encrypted blob in
+  // object storage; we just persist its id + AES key. Pass null to remove.
+  app.post("/groups/:groupId/avatar", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({
+        blobId: z.string().min(1).nullable().optional(),
+        key: z.string().min(1).nullable().optional()
+      })
+      .parse(req.body);
+    if (!(await isGroupAdmin(db, params.groupId, userId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+    await db.query(
+      `UPDATE groups SET avatar_blob_id = $2, avatar_key = $3, updated_at = now() WHERE id = $1`,
+      [params.groupId, body.blobId ?? null, body.key ?? null]
+    );
+    const actorName = await getUserLabel(db, userId);
+    await emitGroupSystemEvent(db, opts, {
+      groupId: params.groupId,
+      type: "group_avatar",
+      actorUserId: userId,
+      actorName
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/groups/:groupId/members/:userId/role", async (req: any, reply: any) => {
+    const requesterId = req.user.sub as string;
+    const params = z
+      .object({ groupId: z.string().uuid(), userId: z.string().uuid() })
+      .parse(req.params);
+    const body = z.object({ role: z.enum(["admin", "member"]) }).parse(req.body);
+    if (!(await isGroupAdmin(db, params.groupId, requesterId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+    const target = await db.query(
+      `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2`,
+      [params.groupId, params.userId]
+    );
+    if (target.rowCount === 0) return reply.code(404).send({ ok: false, error: "Not a member" });
+
+    await db.query(`UPDATE group_members SET role = $3 WHERE group_id = $1 AND user_id = $2`, [
+      params.groupId,
+      params.userId,
+      body.role
+    ]);
+    const actorName = await getUserLabel(db, requesterId);
+    const targetName = await getUserLabel(db, params.userId);
+    await emitGroupSystemEvent(db, opts, {
+      groupId: params.groupId,
+      type: body.role === "admin" ? "member_promoted" : "member_demoted",
+      actorUserId: requesterId,
+      targetUserId: params.userId,
+      actorName,
+      targetName
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.delete("/groups/:groupId", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    if (!(await isGroupAdmin(db, params.groupId, userId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+    // Gather member devices BEFORE deleting (cascade removes membership rows).
+    const members = await db.query<{ user_id: string }>(
+      `SELECT user_id FROM group_members WHERE group_id = $1`,
+      [params.groupId]
+    );
+    const targets: Array<{ userId: string; deviceId: string }> = [];
+    for (const m of members.rows) {
+      targets.push(...(await listUserDevices(db, m.user_id)));
+    }
+    const actorName = await getUserLabel(db, userId);
+    await db.query(`DELETE FROM groups WHERE id = $1`, [params.groupId]);
+    await publishCallEvent(
+      { centrifugoApiUrl: opts?.centrifugoApiUrl, centrifugoApiKey: opts?.centrifugoApiKey },
+      targets,
+      {
+        type: "group_event",
+        eventType: "group_deleted",
+        groupId: params.groupId,
+        conversationId: `group:${params.groupId}`,
+        actorUserId: userId,
+        actorName,
+        ts: new Date().toISOString()
+      }
+    );
+    return reply.send({ ok: true });
+  });
+
+  app.post("/groups/:groupId/rekeyed", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    if (!(await isGroupAdmin(db, params.groupId, userId))) {
+      return reply.code(403).send({ ok: false, error: "Admin only" });
+    }
+    await db.query(`UPDATE groups SET needs_rekey = false, updated_at = now() WHERE id = $1`, [
+      params.groupId
+    ]);
+    return reply.send({ ok: true });
+  });
+
+  app.get("/groups/:groupId/events", async (req: any, reply: any) => {
+    const userId = req.user.sub as string;
+    const params = z.object({ groupId: z.string().uuid() }).parse(req.params);
+    const member = await db.query(
+      `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2`,
+      [params.groupId, userId]
+    );
+    if (member.rowCount === 0) return reply.code(403).send({ ok: false, error: "Not a member" });
+
+    const res = await db.query(
+      `
+      SELECT e.id, e.type, e.actor_user_id, e.target_user_id, e.created_at, e.meta,
+             ua.username AS actor_username, ua.display_name AS actor_display_name,
+             ut.username AS target_username, ut.display_name AS target_display_name
+      FROM group_system_events e
+      LEFT JOIN users ua ON ua.id = e.actor_user_id
+      LEFT JOIN users ut ON ut.id = e.target_user_id
+      WHERE e.group_id = $1
+      ORDER BY e.created_at ASC
+      LIMIT 200
+      `,
+      [params.groupId]
+    );
+    return reply.send({ ok: true, events: res.rows });
   });
 
   app.get("/groups/:groupId/members", async (req: any, reply: any) => {
@@ -309,11 +680,16 @@ export function registerPhase3Routes(
       })
       .parse(req.body);
 
-    const admin = await db.query(
-      `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2 AND role = 'admin'`,
+    // Any group member who holds the key may seal it to another member's
+    // device. This enables key recovery / distribution to new or reinstalled
+    // devices without requiring the (single) admin to be online. The envelope
+    // is opaque ciphertext, so a member can't learn anything they don't already
+    // have (they already possess the group key to send/read).
+    const member = await db.query(
+      `SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2`,
       [params.groupId, userId]
     );
-    if (admin.rowCount === 0) return reply.code(403).send({ ok: false, error: "Admin only" });
+    if (member.rowCount === 0) return reply.code(403).send({ ok: false, error: "Not a member" });
 
     await db.query(
       `
@@ -350,11 +726,10 @@ export function registerPhase3Routes(
       FROM group_key_envelopes
       WHERE group_id = $1 AND recipient_user_id = $2 AND recipient_device_id = $3
       ORDER BY key_epoch DESC
-      LIMIT 1
       `,
       [params.groupId, userId, deviceId]
     );
-    return reply.send({ ok: true, envelope: res.rows[0] ?? null });
+    return reply.send({ ok: true, envelope: res.rows[0] ?? null, envelopes: res.rows });
   });
 
   // --- Calls (LiveKit dev) ---

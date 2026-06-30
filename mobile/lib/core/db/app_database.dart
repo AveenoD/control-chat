@@ -64,6 +64,27 @@ class Messages extends Table {
   /// Voice-note duration (ms) and comma-separated waveform bars (0–100).
   IntColumn get mediaDurationMs => integer().nullable()();
   TextColumn get mediaWaveform => text().nullable()();
+
+  /// Reply/quote: id of the referenced message + a cached preview so the quote
+  /// renders even if the original isn't stored locally.
+  TextColumn get replyToId => text().nullable()();
+  TextColumn get replySender => text().nullable()();
+  TextColumn get replyPreview => text().nullable()();
+  TextColumn get replyMediaType => text().nullable()();
+}
+
+/// Emoji reactions on messages. One row per (target message, reactor) — a user
+/// can have at most one reaction on a message (it replaces / toggles off).
+class MessageReactions extends Table {
+  /// Target message id (server message_id / envelopeId).
+  TextColumn get targetId => text()();
+  TextColumn get conversationId => text()();
+  TextColumn get reactorUserId => text()();
+  TextColumn get emoji => text()();
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {targetId, reactorUserId};
 }
 
 /// Per-conversation feature settings kept separate from the chat list so they
@@ -101,18 +122,27 @@ class Conversations extends Table {
   IntColumn get lastAt => integer()();
   TextColumn get lastPreview => text().withDefault(const Constant(''))();
 
+  /// True once the local user leaves (or is removed from) a group. The chat
+  /// stays in the list as a read-only thread instead of vanishing.
+  BoolColumn get leftGroup => boolean().withDefault(const Constant(false))();
+
+  /// Group avatar: encrypted image blob id + its AES key (null = no photo).
+  TextColumn get avatarBlobId => text().nullable()();
+  TextColumn get avatarKey => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {conversationId};
 }
 
-@DriftDatabase(tables: [Messages, Conversations, CallHistoryItems, ConversationSettings])
+@DriftDatabase(
+    tables: [Messages, Conversations, CallHistoryItems, ConversationSettings, MessageReactions])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -154,6 +184,20 @@ class AppDatabase extends _$AppDatabase {
           if (from < 6) {
             await m.addColumn(messages, messages.mediaDurationMs);
             await m.addColumn(messages, messages.mediaWaveform);
+          }
+          if (from < 7) {
+            await m.addColumn(messages, messages.replyToId);
+            await m.addColumn(messages, messages.replySender);
+            await m.addColumn(messages, messages.replyPreview);
+            await m.addColumn(messages, messages.replyMediaType);
+            await m.createTable(messageReactions);
+          }
+          if (from < 8) {
+            await m.addColumn(conversations, conversations.leftGroup);
+          }
+          if (from < 9) {
+            await m.addColumn(conversations, conversations.avatarBlobId);
+            await m.addColumn(conversations, conversations.avatarKey);
           }
         },
       );

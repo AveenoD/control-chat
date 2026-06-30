@@ -4,6 +4,7 @@ import 'package:gap/gap.dart';
 
 import '../../core/chat/group_repository.dart';
 import 'chat_thread_screen.dart';
+import 'member_picker_screen.dart';
 
 class CreateGroupScreen extends ConsumerStatefulWidget {
   const CreateGroupScreen({super.key});
@@ -14,27 +15,33 @@ class CreateGroupScreen extends ConsumerStatefulWidget {
 
 class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
   final _title = TextEditingController();
-  final _members = TextEditingController();
+  final List<String> _usernames = [];
   bool _creating = false;
   String? _error;
 
   @override
   void dispose() {
     _title.dispose();
-    _members.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickMembers() async {
+    final picked = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(builder: (_) => const MemberPickerScreen(title: 'Select members')),
+    );
+    if (picked != null) {
+      setState(() {
+        _usernames
+          ..clear()
+          ..addAll(picked);
+      });
+    }
   }
 
   Future<void> _create() async {
     final title = _title.text.trim();
-    final usernames = _members.text
-        .split(RegExp(r'[,\s]+'))
-        .map((s) => s.trim().replaceFirst('@', ''))
-        .where((s) => s.isNotEmpty)
-        .toList();
-
-    if (title.isEmpty || usernames.isEmpty) {
-      setState(() => _error = 'Enter a group name and at least one @username');
+    if (title.isEmpty || _usernames.isEmpty) {
+      setState(() => _error = 'Enter a group name and add at least one member');
       return;
     }
 
@@ -46,7 +53,7 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
     try {
       final group = await ref.read(groupRepositoryProvider).createGroup(
             title: title,
-            memberUsernames: usernames,
+            memberUsernames: _usernames,
           );
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
@@ -85,16 +92,26 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
               ),
             ),
             const Gap(16),
-            TextField(
-              controller: _members,
-              minLines: 2,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                labelText: 'Members (@username)',
-                hintText: 'shaikh_06, anees_02',
-                border: OutlineInputBorder(),
-              ),
+            OutlinedButton.icon(
+              onPressed: _creating ? null : _pickMembers,
+              icon: const Icon(Icons.group_add),
+              label: Text(_usernames.isEmpty
+                  ? 'Add members'
+                  : '${_usernames.length} member(s) selected'),
             ),
+            if (_usernames.isNotEmpty) ...[
+              const Gap(10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _usernames
+                    .map((u) => Chip(
+                          label: Text('@$u'),
+                          onDeleted: () => setState(() => _usernames.remove(u)),
+                        ))
+                    .toList(),
+              ),
+            ],
             if (_error != null) ...[
               const Gap(12),
               Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),

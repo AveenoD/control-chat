@@ -7,6 +7,18 @@ import 'dart:convert';
 /// real user text effectively impossible.
 const _kMarker = '\u0001ATW1\u0001';
 
+/// A lightweight reference to the message being replied to. The preview/sender
+/// travel with the reply so the recipient can render the quote even without the
+/// original message stored locally.
+class WireReply {
+  const WireReply({required this.id, this.sender, this.preview, this.mediaType});
+
+  final String id;
+  final String? sender;
+  final String? preview;
+  final String? mediaType;
+}
+
 /// A decoded chat payload. Plain (non-marker) bodies decode to a normal
 /// [WireMessage] with just [text], so old messages keep working.
 class WireMessage {
@@ -26,6 +38,14 @@ class WireMessage {
     this.mediaFilename,
     this.mediaDurationMs,
     this.mediaWaveform,
+    this.replyToId,
+    this.replySender,
+    this.replyPreview,
+    this.replyMediaType,
+    this.isReaction = false,
+    this.reactionTargetId,
+    this.reactionEmoji,
+    this.reactionAdd = true,
   });
 
   /// For media messages [text] is the (optional) caption.
@@ -64,6 +84,19 @@ class WireMessage {
   /// Normalised waveform bars 0–100 (for 'voice' attachments).
   final List<int>? mediaWaveform;
 
+  /// Reply/quote metadata (the message this one replies to).
+  final String? replyToId;
+  final String? replySender;
+  final String? replyPreview;
+  final String? replyMediaType;
+
+  /// Reaction control: applies an emoji reaction to [reactionTargetId] rather
+  /// than rendering as a bubble.
+  final bool isReaction;
+  final String? reactionTargetId;
+  final String? reactionEmoji;
+  final bool reactionAdd;
+
   bool get isMedia => mediaType != null && mediaBlobId != null && mediaKey != null;
 }
 
@@ -71,13 +104,37 @@ class WireMessage {
 class ChatWire {
   /// Wraps [text] only when a feature flag is set; otherwise returns it
   /// unchanged (backward-compatible + smaller for ordinary messages).
-  static String encodeText(String text, {bool viewOnce = false, int ttlSeconds = 0}) {
-    if (!viewOnce && ttlSeconds <= 0) return text;
+  static String encodeText(String text,
+      {bool viewOnce = false, int ttlSeconds = 0, WireReply? reply}) {
+    if (!viewOnce && ttlSeconds <= 0 && reply == null) return text;
     final m = <String, dynamic>{'b': text};
     if (viewOnce) m['vo'] = true;
     if (ttlSeconds > 0) m['ttl'] = ttlSeconds;
+    _putReply(m, reply);
     return '$_kMarker${jsonEncode(m)}';
   }
+
+  /// Writes reply/quote keys into a payload map (no-op when [reply] is null).
+  static void _putReply(Map<String, dynamic> m, WireReply? reply) {
+    if (reply == null) return;
+    m['rid'] = reply.id;
+    if (reply.sender != null) m['rsn'] = reply.sender;
+    if (reply.preview != null) m['rpv'] = reply.preview;
+    if (reply.mediaType != null) m['rmt'] = reply.mediaType;
+  }
+
+  /// A reaction control payload: add/remove an emoji on a target message.
+  static String encodeReaction({
+    required String targetId,
+    required String emoji,
+    required bool add,
+  }) =>
+      '$_kMarker${jsonEncode(<String, dynamic>{
+        'ctl': 'react',
+        'tid': targetId,
+        'emoji': emoji,
+        'op': add ? 'add' : 'remove',
+      })}';
 
   /// A control payload that tells the peer the disappearing-message timer
   /// changed. Recipients apply it and never render a bubble.
@@ -97,6 +154,7 @@ class ChatWire {
     String caption = '',
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final m = <String, dynamic>{
       'mt': mediaType,
@@ -110,6 +168,7 @@ class ChatWire {
     if (caption.isNotEmpty) m['b'] = caption;
     if (viewOnce) m['vo'] = true;
     if (ttlSeconds > 0) m['ttl'] = ttlSeconds;
+    _putReply(m, reply);
     return '$_kMarker${jsonEncode(m)}';
   }
 
@@ -123,6 +182,7 @@ class ChatWire {
     String caption = '',
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final m = <String, dynamic>{
       'mt': 'file',
@@ -135,6 +195,7 @@ class ChatWire {
     if (caption.isNotEmpty) m['b'] = caption;
     if (viewOnce) m['vo'] = true;
     if (ttlSeconds > 0) m['ttl'] = ttlSeconds;
+    _putReply(m, reply);
     return '$_kMarker${jsonEncode(m)}';
   }
 
@@ -149,6 +210,7 @@ class ChatWire {
     int? size,
     bool viewOnce = false,
     int ttlSeconds = 0,
+    WireReply? reply,
   }) {
     final m = <String, dynamic>{
       'mt': 'voice',
@@ -161,6 +223,7 @@ class ChatWire {
     if (size != null) m['sz'] = size;
     if (viewOnce) m['vo'] = true;
     if (ttlSeconds > 0) m['ttl'] = ttlSeconds;
+    _putReply(m, reply);
     return '$_kMarker${jsonEncode(m)}';
   }
 
@@ -173,6 +236,15 @@ class ChatWire {
           text: '',
           isTimerControl: true,
           timerSeconds: (j['ttl'] as num?)?.toInt() ?? 0,
+        );
+      }
+      if (j['ctl'] == 'react') {
+        return WireMessage(
+          text: '',
+          isReaction: true,
+          reactionTargetId: j['tid'] as String?,
+          reactionEmoji: j['emoji'] as String?,
+          reactionAdd: (j['op'] as String?) != 'remove',
         );
       }
       return WireMessage(
@@ -189,6 +261,10 @@ class ChatWire {
         mediaFilename: j['fn'] as String?,
         mediaDurationMs: (j['dur'] as num?)?.toInt(),
         mediaWaveform: (j['wf'] as List?)?.map((e) => (e as num).toInt()).toList(),
+        replyToId: j['rid'] as String?,
+        replySender: j['rsn'] as String?,
+        replyPreview: j['rpv'] as String?,
+        replyMediaType: j['rmt'] as String?,
       );
     } catch (_) {
       // Corrupt/unknown payload — show the raw text rather than losing it.

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/session_provider.dart';
 import '../../core/calls/call_repository.dart';
+import '../../core/chat/incoming_message_service.dart';
 import '../../core/realtime/chat_realtime_service.dart';
 import '../calls/call_room_screen.dart';
 import '../tabs/calls/calls_screen.dart';
@@ -36,6 +37,10 @@ class _AppShellState extends ConsumerState<AppShell> {
   void initState() {
     super.initState();
     _realtimeSub = ref.read(chatRealtimeProvider).events.listen(_onRealtime);
+    // App-global message ingestion: decrypts + stores + delivery-acks every
+    // incoming message regardless of which screen is open, so "delivered" (✓✓)
+    // works even when the chat isn't on screen. Read receipts stay per-chat.
+    ref.read(incomingMessageServiceProvider).start();
     WidgetsBinding.instance.addPostFrameCallback((_) => _connectRealtimeIfNeeded());
   }
 
@@ -92,6 +97,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void dispose() {
     _realtimeSub?.cancel();
+    ref.read(incomingMessageServiceProvider).stop();
     super.dispose();
   }
 

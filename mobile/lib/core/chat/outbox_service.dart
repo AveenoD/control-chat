@@ -17,6 +17,10 @@ class OutboxEntry {
     this.attempts = 0,
     this.viewOnce = false,
     this.ttlSeconds = 0,
+    this.replyToId,
+    this.replySender,
+    this.replyPreview,
+    this.replyMediaType,
   });
 
   final String clientMessageId;
@@ -34,6 +38,12 @@ class OutboxEntry {
   /// Disappearing TTL in seconds (0 = none) applied to this message.
   final int ttlSeconds;
 
+  /// Reply/quote metadata, preserved across retries.
+  final String? replyToId;
+  final String? replySender;
+  final String? replyPreview;
+  final String? replyMediaType;
+
   Map<String, dynamic> toJson() => {
         'clientMessageId': clientMessageId,
         'conversationId': conversationId,
@@ -45,6 +55,10 @@ class OutboxEntry {
         'attempts': attempts,
         'viewOnce': viewOnce,
         'ttlSeconds': ttlSeconds,
+        'replyToId': replyToId,
+        'replySender': replySender,
+        'replyPreview': replyPreview,
+        'replyMediaType': replyMediaType,
       };
 
   factory OutboxEntry.fromJson(Map<String, dynamic> json) => OutboxEntry(
@@ -58,6 +72,10 @@ class OutboxEntry {
         attempts: json['attempts'] as int? ?? 0,
         viewOnce: json['viewOnce'] as bool? ?? false,
         ttlSeconds: json['ttlSeconds'] as int? ?? 0,
+        replyToId: json['replyToId'] as String?,
+        replySender: json['replySender'] as String?,
+        replyPreview: json['replyPreview'] as String?,
+        replyMediaType: json['replyMediaType'] as String?,
       );
 }
 

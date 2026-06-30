@@ -167,7 +167,8 @@ app.get("/conversations", async (req: any) => {
 
       FROM message_envelopes
 
-      WHERE sender_user_id = $1 OR recipient_user_id = $1
+      WHERE (sender_user_id = $1 OR recipient_user_id = $1)
+        AND conversation_id NOT LIKE 'group:%'
 
     ),
 
@@ -222,6 +223,10 @@ app.get("/conversations", async (req: any) => {
            g.title AS peer_display_name,
 
            NULL::text AS peer_avatar_url,
+
+           g.avatar_blob_id AS group_avatar_blob_id,
+
+           g.avatar_key AS group_avatar_key,
 
            'group' AS conv_type
 
@@ -329,6 +334,33 @@ app.get("/conversations/:conversationId/messages", async (req: any) => {
 
 
   return { ok: true, messages: res.rows };
+
+});
+
+
+
+// Consume a view-once message: permanently delete THIS device's encrypted
+// envelope from the server so the ciphertext can never be re-fetched and
+// re-decrypted (closing the "open the app, re-download, decrypt again" gap).
+// Per-device delete keeps multi-device working — each device consumes its own.
+app.post("/messages/:messageId/consume", async (req: any, reply: any) => {
+
+  const userId = req.user.sub as string;
+
+  const deviceId = req.user.deviceId as string;
+
+  const params = z.object({ messageId: z.string().uuid() }).parse(req.params);
+
+  await db.query(
+
+    `DELETE FROM message_envelopes
+     WHERE message_id = $1 AND recipient_user_id = $2 AND recipient_device_id = $3`,
+
+    [params.messageId, userId, deviceId]
+
+  );
+
+  return reply.send({ ok: true });
 
 });
 
