@@ -1,3 +1,13 @@
+## [02-07-2026 12:00] — Todays task: privacy features status doc
+
+**What changed:** Added `Todays task/privacy-features-status-02-07-2026.md` listing implemented privacy/chat features at top and pending items (per-chat screenshot, download enforce, 1-message request, screenshot notify, etc.) with date 02-07-2026.
+**Files touched:** `Todays task/privacy-features-status-02-07-2026.md`
+**API endpoints used:** None
+**Breaking change:** NO
+**Branch:** anees-dev-legal-ToS
+
+---
+
 ## [01-07-2026 19:35] — Fix unread badges after leaving chat
 
 **What changed:** Fixed `activeConversationIdProvider` not clearing when backing out of a chat thread (protected `.state` assignment + missing pop handler), which caused the app to think the chat was still open and skip unread-badge increments for new messages.
