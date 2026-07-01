@@ -42,6 +42,7 @@ class ConversationSummary {
     this.leftGroup = false,
     this.avatarBlobId,
     this.avatarKey,
+    this.unreadCount = 0,
   });
 
   final String conversationId;
@@ -56,7 +57,12 @@ class ConversationSummary {
   final String? avatarBlobId;
   final String? avatarKey;
 
+  /// Badge count for unread messages in this thread.
+  final int unreadCount;
+
   bool get hasAvatar => (avatarBlobId?.isNotEmpty ?? false) && (avatarKey?.isNotEmpty ?? false);
+
+  bool get hasUnread => unreadCount > 0;
 }
 
 class ChatMessage {

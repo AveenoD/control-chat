@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/session_provider.dart';
 import '../db/message_store.dart';
 import '../realtime/chat_realtime_service.dart';
+import 'active_conversation.dart';
 import 'chat_models.dart';
+import 'typing_service.dart';
 import 'chat_repository.dart';
 import 'group_repository.dart';
 import 'message_wire.dart';
@@ -162,7 +164,10 @@ class IncomingMessageService {
         replyPreview: wire.replyPreview,
         replyMediaType: wire.replyMediaType,
       ),
+      bumpUnread: _ref.read(activeConversationIdProvider) != convId,
     );
+
+    _ref.read(peerTypingProvider.notifier).clear(convId);
 
     // View-once: we now hold the plaintext locally, so immediately delete the
     // server-side ciphertext — a re-download can never resurrect/re-decrypt it.
@@ -209,6 +214,7 @@ class IncomingMessageService {
         createdAt: ts,
         isMine: false,
       ),
+      bumpUnread: _ref.read(activeConversationIdProvider) != convId,
     );
 
     // Group deleted for everyone → make the chat read-only (it no longer exists

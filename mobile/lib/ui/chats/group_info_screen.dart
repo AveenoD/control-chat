@@ -536,7 +536,7 @@ class _GroupInfoScreenState extends ConsumerState<GroupInfoScreen> {
                         ),
                         const Gap(2),
                         Center(
-                          child: Text('${_members.length} members · E2EE',
+                          child: Text('${_members.length} members',
                               style: Theme.of(context).textTheme.bodySmall),
                         ),
                         const Gap(16),

@@ -39,7 +39,9 @@ import 'group_avatar.dart';
 
 import 'group_invite.dart';
 
+import '../../core/chat/active_conversation.dart';
 import '../../core/chat/chat_models.dart';
+import '../../core/chat/typing_service.dart';
 
 import '../../core/chat/chat_repository.dart';
 
@@ -148,7 +150,6 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
   Timer? _typingDebounce;
 
-  Timer? _typingClearTimer;
   Timer? _typingKeepAlive;
 
   StreamSubscription<Map<String, dynamic>>? _realtimeSub;
@@ -171,8 +172,6 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
   int _lastCount = 0;
 
   final Set<String> _acknowledgedDelivery = {};
-
-  bool _peerTyping = false;
 
   bool _readReceiptsEnabled = true;
 
@@ -267,6 +266,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     _startRealtime();
 
     _input.addListener(_onInputChanged);
+
+    final convId = _conversationId;
+    if (convId != null) {
+      // Riverpod forbids modifying providers inside initState — defer until
+      // after the first frame so the widget tree has finished building.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(activeConversationIdProvider.notifier).setActive(convId);
+        ref.read(messageStoreProvider).clearUnread(convId);
+      });
+    }
 
   }
 
@@ -618,38 +628,6 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
       return;
     }
 
-    if (type == 'typing') {
-
-      if (convId != _conversationId) return;
-
-      final uid = data['userId'] as String?;
-
-      final myId = ref.read(sessionProvider).userId;
-
-      if (uid == null || uid == myId) return;
-
-      if (!mounted) return;
-
-      setState(() => _peerTyping = data['isTyping'] as bool? ?? false);
-
-      _typingClearTimer?.cancel();
-
-      if (_peerTyping) {
-
-        _typingClearTimer = Timer(const Duration(seconds: 4), () {
-
-          if (mounted) setState(() => _peerTyping = false);
-
-        });
-
-      }
-
-      return;
-
-    }
-
-
-
     if (type == 'delivery') {
       if (convId != _conversationId) return;
       final eid = data['envelopeId'] as String?;
@@ -932,7 +910,6 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     WidgetsBinding.instance.removeObserver(this);
 
     _typingDebounce?.cancel();
-    _typingClearTimer?.cancel();
     _typingKeepAlive?.cancel();
     _realtimeSub?.cancel();
     _messagesSub?.cancel();
@@ -950,6 +927,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
     _recAmpSub?.cancel();
 
     _scrollController.dispose();
+
+    // Defer until after dispose completes — Riverpod disallows sync writes in dispose.
+    final active = ref.read(activeConversationIdProvider.notifier);
+    Future.microtask(() => active.setActive(null));
 
     super.dispose();
 
@@ -2384,8 +2365,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
   Widget build(BuildContext context) {
 
     final primary = Theme.of(context).colorScheme.primary;
+    final peerTyping = ref.watch(peerTypingProvider)[widget.conversationId] ?? false;
 
-    return Scaffold(
+    return PopScope(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          ref.read(activeConversationIdProvider.notifier).setActive(null);
+        }
+      },
+      child: Scaffold(
 
       appBar: AppBar(
 
@@ -2417,7 +2405,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
             // Whether we SEE the peer typing depends only on whether they chose
             // to broadcast it — never on our own typing-privacy toggle.
-            if (_peerTyping)
+            if (peerTyping)
 
               Text('typing…', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: primary, fontStyle: FontStyle.italic))
 
@@ -2427,7 +2415,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
             else if (_isGroup)
 
-              Text('Group · E2EE · tap for info', style: Theme.of(context).textTheme.labelSmall),
+              Text('tap for info', style: Theme.of(context).textTheme.labelSmall),
 
           ],
 
@@ -2612,7 +2600,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
                           ),
 
-                          if (_peerTyping)
+                          if (peerTyping)
                             const Padding(
                               padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                               child: Align(
@@ -2814,6 +2802,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> with Widget
 
       ),
 
+    ),
     );
 
   }

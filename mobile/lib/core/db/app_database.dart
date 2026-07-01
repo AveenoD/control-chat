@@ -122,6 +122,9 @@ class Conversations extends Table {
   IntColumn get lastAt => integer()();
   TextColumn get lastPreview => text().withDefault(const Constant(''))();
 
+  /// Unread messages in this thread (badge on the chat list). Client-maintained.
+  IntColumn get unreadCount => integer().withDefault(const Constant(0))();
+
   /// True once the local user leaves (or is removed from) a group. The chat
   /// stays in the list as a read-only thread instead of vanishing.
   BoolColumn get leftGroup => boolean().withDefault(const Constant(false))();
@@ -142,7 +145,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -198,6 +201,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 9) {
             await m.addColumn(conversations, conversations.avatarBlobId);
             await m.addColumn(conversations, conversations.avatarKey);
+          }
+          if (from < 10) {
+            await m.addColumn(conversations, conversations.unreadCount);
           }
         },
       );

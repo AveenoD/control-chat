@@ -9,6 +9,7 @@ import '../../../core/auth/session_provider.dart';
 import '../../../core/chat/chat_models.dart';
 import '../../../core/chat/chat_repository.dart';
 import '../../../core/chat/group_repository.dart';
+import '../../../core/chat/typing_service.dart';
 import '../../../core/db/message_store.dart';
 import '../../../core/realtime/chat_realtime_service.dart';
 import '../../chats/chat_thread_screen.dart';
@@ -250,6 +251,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     }
 
     final primary = Theme.of(context).colorScheme.primary;
+    final typingMap = ref.watch(peerTypingProvider);
     return Scaffold(
       appBar: AppBar(
         title: const Text('AuraTalk'),
@@ -351,6 +353,8 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                               message: c.leftGroup ? 'You left the group' : c.lastPreview,
                               time: _formatTime(c.lastAt),
                               isGroup: c.isGroup,
+                              unreadCount: c.unreadCount,
+                              peerTyping: typingMap[c.conversationId] ?? false,
                               avatarBlobId: c.avatarBlobId,
                               avatarKey: c.avatarKey,
                               onTap: () async {
@@ -413,6 +417,8 @@ class _ChatTile extends StatelessWidget {
     required this.onTap,
     this.username,
     this.isGroup = false,
+    this.unreadCount = 0,
+    this.peerTyping = false,
     this.avatarBlobId,
     this.avatarKey,
   });
@@ -423,8 +429,12 @@ class _ChatTile extends StatelessWidget {
   final String time;
   final VoidCallback onTap;
   final bool isGroup;
+  final int unreadCount;
+  final bool peerTyping;
   final String? avatarBlobId;
   final String? avatarKey;
+
+  bool get _hasUnread => unreadCount > 0;
 
   bool get _hasGroupAvatar =>
       isGroup && (avatarBlobId?.isNotEmpty ?? false) && (avatarKey?.isNotEmpty ?? false);
@@ -432,6 +442,9 @@ class _ChatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
+    final previewText = peerTyping
+        ? 'typing…'
+        : (message.isEmpty ? 'Start chatting' : message);
     return Card(
       child: InkWell(
         onTap: onTap,
@@ -458,13 +471,21 @@ class _ChatTile extends StatelessWidget {
                         Expanded(
                           child: Text(
                             name,
-                            style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                  fontWeight: _hasUnread ? FontWeight.w900 : FontWeight.w800,
+                                ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const Gap(10),
-                        Text(time, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: const Color(0xFF9AA3B2))),
+                        Text(
+                          time,
+                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                color: _hasUnread ? primary : const Color(0xFF9AA3B2),
+                                fontWeight: _hasUnread ? FontWeight.w700 : FontWeight.normal,
+                              ),
+                        ),
                       ],
                     ),
                     if (username != null) ...[
@@ -473,14 +494,40 @@ class _ChatTile extends StatelessWidget {
                     ],
                     const Gap(4),
                     Text(
-                      message.isEmpty ? 'Start chatting' : message,
+                      previewText,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(color: const Color(0xFF6B7280)),
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            color: peerTyping
+                                ? primary
+                                : (_hasUnread ? const Color(0xFF111827) : const Color(0xFF6B7280)),
+                            fontWeight: peerTyping || _hasUnread ? FontWeight.w600 : FontWeight.normal,
+                            fontStyle: peerTyping ? FontStyle.italic : FontStyle.normal,
+                          ),
                     ),
                   ],
                 ),
               ),
+              if (_hasUnread) ...[
+                const Gap(8),
+                Container(
+                  constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  decoration: BoxDecoration(
+                    color: primary,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    unreadCount > 99 ? '99+' : '$unreadCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

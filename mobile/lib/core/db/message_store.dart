@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../chat/chat_models.dart';
 import '../chat/conversation_id.dart';
+import '../chat/message_preview.dart';
 import 'app_database.dart';
 
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
@@ -13,6 +14,11 @@ final appDatabaseProvider = Provider<AppDatabase>((ref) {
 
 final messageStoreProvider = Provider<MessageStore>((ref) {
   return MessageStore(ref.watch(appDatabaseProvider));
+});
+
+/// Sum of unread badges across all conversations (for the bottom-nav dot).
+final totalUnreadProvider = StreamProvider<int>((ref) {
+  return ref.watch(messageStoreProvider).watchTotalUnread();
 });
 
 bool _isSentinel(String body) => body.startsWith('🔒');
@@ -98,7 +104,11 @@ class MessageStore {
 
   /// Insert/update a confirmed (server-side) message. Preserves delivery/read
   /// flags and never overwrites a good decryption with a failure sentinel.
-  Future<void> upsertServerMessage(ChatMessage m) async {
+  ///
+  /// Set [bumpUnread] when an incoming message arrives while this chat is not
+  /// on screen — increments the list badge.
+  Future<void> upsertServerMessage(ChatMessage m, {bool bumpUnread = false}) async {
+    var inserted = false;
     // Run the find-then-write atomically. Multiple concurrent ingesters (the
     // app-global incoming handler, the thread's sync, a realtime push) can race
     // on the same message; without a transaction each would read "not found"
@@ -142,6 +152,7 @@ class MessageStore {
               replyMediaType: Value(m.replyMediaType),
             ),
           );
+        inserted = true;
       return;
     }
     // A re-fetch must never resurrect a view-once message the user already
@@ -181,6 +192,9 @@ class MessageStore {
       ),
     );
     });
+    if (inserted) {
+      await _touchConversation(m, bumpUnread: bumpUnread && !m.isMine);
+    }
   }
 
   Future<void> upsertMany(List<ChatMessage> messages) async {
@@ -239,6 +253,20 @@ class MessageStore {
             replyMediaType: Value(replyMediaType),
           ),
         );
+    await _touchConversation(
+      ChatMessage(
+        id: clientMessageId,
+        conversationId: conversationId,
+        senderUserId: senderUserId,
+        text: text,
+        createdAt: createdAt,
+        isMine: true,
+        viewOnce: viewOnce,
+        mediaType: mediaType,
+        mediaFilename: mediaFilename,
+      ),
+      bumpUnread: false,
+    );
   }
 
   /// Record the uploaded blob id + key on an optimistic media message once the
@@ -365,6 +393,60 @@ class MessageStore {
 
   // ---- Conversations (offline chat list) ----
 
+  /// Updates list preview/time (and optionally unread) after a message lands.
+  Future<void> _touchConversation(ChatMessage m, {required bool bumpUnread}) async {
+    final convId = m.conversationId;
+    final isGroup = isGroupConversation(convId);
+    final preview = messageListPreview(m, isGroup: isGroup);
+    final atMs = m.createdAt.millisecondsSinceEpoch;
+
+    final row = await (_db.select(_db.conversations)
+          ..where((t) => t.conversationId.equals(convId))
+          ..limit(1))
+        .getSingleOrNull();
+
+    var unread = row?.unreadCount ?? 0;
+    if (bumpUnread) unread++;
+
+    final useAt = row == null ? atMs : (atMs >= row.lastAt ? atMs : row.lastAt);
+    final usePreview =
+        row == null || atMs >= row.lastAt ? preview : row.lastPreview;
+
+    if (row == null) {
+      await _db.into(_db.conversations).insert(
+            ConversationsCompanion.insert(
+              conversationId: convId,
+              isGroup: Value(isGroup),
+              groupId: Value(isGroup ? groupIdFromConversation(convId) : null),
+              lastAt: useAt,
+              lastPreview: Value(usePreview),
+              unreadCount: Value(unread),
+            ),
+            mode: InsertMode.insertOrReplace,
+          );
+    } else {
+      await (_db.update(_db.conversations)..where((t) => t.conversationId.equals(convId)))
+          .write(
+        ConversationsCompanion(
+          lastAt: Value(useAt),
+          lastPreview: Value(usePreview),
+          unreadCount: Value(unread),
+        ),
+      );
+    }
+  }
+
+  /// Clears the unread badge when the user opens a chat thread.
+  Future<void> clearUnread(String conversationId) async {
+    await (_db.update(_db.conversations)..where((t) => t.conversationId.equals(conversationId)))
+        .write(const ConversationsCompanion(unreadCount: Value(0)));
+  }
+
+  Stream<int> watchTotalUnread() {
+    return watchConversations()
+        .map((rows) => rows.fold<int>(0, (sum, r) => sum + r.unreadCount));
+  }
+
   Stream<List<ConversationSummary>> watchConversations() {
     final query = _db.select(_db.conversations)
       ..orderBy([(t) => OrderingTerm(expression: t.lastAt, mode: OrderingMode.desc)]);
@@ -387,6 +469,7 @@ class MessageStore {
         leftGroup: r.leftGroup,
         avatarBlobId: r.avatarBlobId,
         avatarKey: r.avatarKey,
+        unreadCount: r.unreadCount,
       );
 
   /// Mark a group conversation as left (read-only). The row is preserved so the
@@ -479,41 +562,55 @@ class MessageStore {
   }
 
   Future<void> upsertConversations(List<ConversationSummary> list) async {
-    await _db.batch((b) {
-      for (final c in list) {
-        b.insert(
-          _db.conversations,
-          ConversationsCompanion.insert(
-            conversationId: c.conversationId,
-            peerUserId: Value(c.peer.userId),
-            title: Value(c.peer.displayName),
-            username: Value(c.peer.username),
-            isGroup: Value(c.isGroup),
-            groupId: Value(c.groupId),
-            lastAt: c.lastAt.millisecondsSinceEpoch,
-            lastPreview: Value(c.lastPreview),
-            avatarBlobId: Value(c.avatarBlobId),
-            avatarKey: Value(c.avatarKey),
-          ),
-          onConflict: DoUpdate(
-            (_) => ConversationsCompanion(
+    for (final c in list) {
+      final existing = await (_db.select(_db.conversations)
+            ..where((t) => t.conversationId.equals(c.conversationId))
+            ..limit(1))
+          .getSingleOrNull();
+
+      var preview = c.lastPreview;
+      var lastAt = c.lastAt.millisecondsSinceEpoch;
+      final unread = existing?.unreadCount ?? 0;
+
+      if (existing != null) {
+        if (isGenericListPreview(preview)) preview = existing.lastPreview;
+        if (existing.lastAt > lastAt) {
+          lastAt = existing.lastAt;
+          preview = existing.lastPreview;
+        }
+      }
+
+      await _db.into(_db.conversations).insert(
+            ConversationsCompanion.insert(
+              conversationId: c.conversationId,
               peerUserId: Value(c.peer.userId),
               title: Value(c.peer.displayName),
               username: Value(c.peer.username),
               isGroup: Value(c.isGroup),
               groupId: Value(c.groupId),
-              lastAt: Value(c.lastAt.millisecondsSinceEpoch),
-              lastPreview: Value(c.lastPreview),
+              lastAt: lastAt,
+              lastPreview: Value(preview),
+              unreadCount: Value(unread),
               avatarBlobId: Value(c.avatarBlobId),
               avatarKey: Value(c.avatarKey),
-              // Server only returns groups we're still in → clear any stale
-              // "left" flag (covers re-join).
-              leftGroup: const Value(false),
             ),
-          ),
-        );
-      }
-    });
+            onConflict: DoUpdate(
+              (_) => ConversationsCompanion(
+                peerUserId: Value(c.peer.userId),
+                title: Value(c.peer.displayName),
+                username: Value(c.peer.username),
+                isGroup: Value(c.isGroup),
+                groupId: Value(c.groupId),
+                lastAt: Value(lastAt),
+                lastPreview: Value(preview),
+                unreadCount: Value(unread),
+                avatarBlobId: Value(c.avatarBlobId),
+                avatarKey: Value(c.avatarKey),
+                leftGroup: const Value(false),
+              ),
+            ),
+          );
+    }
   }
 
   // ---- Reactions ----

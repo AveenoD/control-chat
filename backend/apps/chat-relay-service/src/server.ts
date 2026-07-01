@@ -210,7 +210,9 @@ app.get("/conversations", async (req: any) => {
 
     `
 
-    SELECT g.id AS group_id, g.title, g.created_at AS last_at,
+    SELECT g.id AS group_id, g.title,
+
+           COALESCE(lm.last_at, g.created_at) AS last_at,
 
            'group:' || g.id::text AS conversation_id,
 
@@ -233,6 +235,16 @@ app.get("/conversations", async (req: any) => {
     FROM groups g
 
     JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = $1
+
+    LEFT JOIN LATERAL (
+
+      SELECT MAX(me.created_at) AS last_at
+
+      FROM message_envelopes me
+
+      WHERE me.conversation_id = 'group:' || g.id::text
+
+    ) lm ON true
 
     `,
 

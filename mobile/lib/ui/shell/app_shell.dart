@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/db/message_store.dart';
 import '../../core/auth/session_provider.dart';
 import '../../core/calls/call_repository.dart';
 import '../../core/chat/incoming_message_service.dart';
+import '../../core/chat/typing_service.dart';
 import '../../core/realtime/chat_realtime_service.dart';
 import '../calls/call_room_screen.dart';
 import '../tabs/calls/calls_screen.dart';
@@ -41,6 +43,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     // incoming message regardless of which screen is open, so "delivered" (✓✓)
     // works even when the chat isn't on screen. Read receipts stay per-chat.
     ref.read(incomingMessageServiceProvider).start();
+    ref.read(typingServiceProvider).start();
     WidgetsBinding.instance.addPostFrameCallback((_) => _connectRealtimeIfNeeded());
   }
 
@@ -98,6 +101,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   void dispose() {
     _realtimeSub?.cancel();
     ref.read(incomingMessageServiceProvider).stop();
+    ref.read(typingServiceProvider).stop();
     super.dispose();
   }
 
@@ -124,6 +128,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     });
 
     final idx = ref.watch(shellTabIndexProvider);
+    final chatsUnread = ref.watch(totalUnreadProvider).value ?? 0;
 
     return Scaffold(
       body: IndexedStack(
@@ -138,6 +143,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       ),
       bottomNavigationBar: _AuraBottomNav(
         index: idx,
+        chatsUnread: chatsUnread,
         onChanged: (i) => ref.read(shellTabIndexProvider.notifier).setIndex(i),
       ),
     );
@@ -145,9 +151,14 @@ class _AppShellState extends ConsumerState<AppShell> {
 }
 
 class _AuraBottomNav extends StatelessWidget {
-  const _AuraBottomNav({required this.index, required this.onChanged});
+  const _AuraBottomNav({
+    required this.index,
+    required this.onChanged,
+    this.chatsUnread = 0,
+  });
 
   final int index;
+  final int chatsUnread;
   final ValueChanged<int> onChanged;
 
   @override
@@ -183,6 +194,7 @@ class _AuraBottomNav extends StatelessWidget {
               selected: index == 2,
               onTap: () => onChanged(2),
               color: color.primary,
+              badgeCount: chatsUnread,
             ),
             _NavItem(
               label: 'Calls',
@@ -210,11 +222,13 @@ class _CenterAction extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.color,
+    this.badgeCount = 0,
   });
 
   final bool selected;
   final VoidCallback onTap;
   final Color color;
+  final int badgeCount;
 
   @override
   Widget build(BuildContext context) {
@@ -225,21 +239,49 @@ class _CenterAction extends StatelessWidget {
         InkResponse(
           onTap: onTap,
           radius: 32,
-          child: Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              color: bg,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: color.withValues(alpha: 0.25),
-                  blurRadius: 18,
-                  offset: const Offset(0, 10),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: bg,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.25),
+                      blurRadius: 18,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+                child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+              ),
+              if (badgeCount > 0)
+                Positioned(
+                  right: -2,
+                  top: -2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      badgeCount > 99 ? '99+' : '$badgeCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         const SizedBox(height: 6),

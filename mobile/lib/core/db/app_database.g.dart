@@ -1790,6 +1790,18 @@ class $ConversationsTable extends Conversations
     requiredDuringInsert: false,
     defaultValue: const Constant(''),
   );
+  static const VerificationMeta _unreadCountMeta = const VerificationMeta(
+    'unreadCount',
+  );
+  @override
+  late final GeneratedColumn<int> unreadCount = GeneratedColumn<int>(
+    'unread_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
   static const VerificationMeta _leftGroupMeta = const VerificationMeta(
     'leftGroup',
   );
@@ -1837,6 +1849,7 @@ class $ConversationsTable extends Conversations
     groupId,
     lastAt,
     lastPreview,
+    unreadCount,
     leftGroup,
     avatarBlobId,
     avatarKey,
@@ -1914,6 +1927,15 @@ class $ConversationsTable extends Conversations
         ),
       );
     }
+    if (data.containsKey('unread_count')) {
+      context.handle(
+        _unreadCountMeta,
+        unreadCount.isAcceptableOrUnknown(
+          data['unread_count']!,
+          _unreadCountMeta,
+        ),
+      );
+    }
     if (data.containsKey('left_group')) {
       context.handle(
         _leftGroupMeta,
@@ -1976,6 +1998,10 @@ class $ConversationsTable extends Conversations
         DriftSqlType.string,
         data['${effectivePrefix}last_preview'],
       )!,
+      unreadCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}unread_count'],
+      )!,
       leftGroup: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}left_group'],
@@ -2007,6 +2033,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
   final int lastAt;
   final String lastPreview;
 
+  /// Unread messages in this thread (badge on the chat list). Client-maintained.
+  final int unreadCount;
+
   /// True once the local user leaves (or is removed from) a group. The chat
   /// stays in the list as a read-only thread instead of vanishing.
   final bool leftGroup;
@@ -2023,6 +2052,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     this.groupId,
     required this.lastAt,
     required this.lastPreview,
+    required this.unreadCount,
     required this.leftGroup,
     this.avatarBlobId,
     this.avatarKey,
@@ -2046,6 +2076,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     }
     map['last_at'] = Variable<int>(lastAt);
     map['last_preview'] = Variable<String>(lastPreview);
+    map['unread_count'] = Variable<int>(unreadCount);
     map['left_group'] = Variable<bool>(leftGroup);
     if (!nullToAbsent || avatarBlobId != null) {
       map['avatar_blob_id'] = Variable<String>(avatarBlobId);
@@ -2074,6 +2105,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
           : Value(groupId),
       lastAt: Value(lastAt),
       lastPreview: Value(lastPreview),
+      unreadCount: Value(unreadCount),
       leftGroup: Value(leftGroup),
       avatarBlobId: avatarBlobId == null && nullToAbsent
           ? const Value.absent()
@@ -2098,6 +2130,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
       groupId: serializer.fromJson<String?>(json['groupId']),
       lastAt: serializer.fromJson<int>(json['lastAt']),
       lastPreview: serializer.fromJson<String>(json['lastPreview']),
+      unreadCount: serializer.fromJson<int>(json['unreadCount']),
       leftGroup: serializer.fromJson<bool>(json['leftGroup']),
       avatarBlobId: serializer.fromJson<String?>(json['avatarBlobId']),
       avatarKey: serializer.fromJson<String?>(json['avatarKey']),
@@ -2115,6 +2148,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
       'groupId': serializer.toJson<String?>(groupId),
       'lastAt': serializer.toJson<int>(lastAt),
       'lastPreview': serializer.toJson<String>(lastPreview),
+      'unreadCount': serializer.toJson<int>(unreadCount),
       'leftGroup': serializer.toJson<bool>(leftGroup),
       'avatarBlobId': serializer.toJson<String?>(avatarBlobId),
       'avatarKey': serializer.toJson<String?>(avatarKey),
@@ -2130,6 +2164,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     Value<String?> groupId = const Value.absent(),
     int? lastAt,
     String? lastPreview,
+    int? unreadCount,
     bool? leftGroup,
     Value<String?> avatarBlobId = const Value.absent(),
     Value<String?> avatarKey = const Value.absent(),
@@ -2142,6 +2177,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     groupId: groupId.present ? groupId.value : this.groupId,
     lastAt: lastAt ?? this.lastAt,
     lastPreview: lastPreview ?? this.lastPreview,
+    unreadCount: unreadCount ?? this.unreadCount,
     leftGroup: leftGroup ?? this.leftGroup,
     avatarBlobId: avatarBlobId.present ? avatarBlobId.value : this.avatarBlobId,
     avatarKey: avatarKey.present ? avatarKey.value : this.avatarKey,
@@ -2162,6 +2198,9 @@ class Conversation extends DataClass implements Insertable<Conversation> {
       lastPreview: data.lastPreview.present
           ? data.lastPreview.value
           : this.lastPreview,
+      unreadCount: data.unreadCount.present
+          ? data.unreadCount.value
+          : this.unreadCount,
       leftGroup: data.leftGroup.present ? data.leftGroup.value : this.leftGroup,
       avatarBlobId: data.avatarBlobId.present
           ? data.avatarBlobId.value
@@ -2181,6 +2220,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
           ..write('groupId: $groupId, ')
           ..write('lastAt: $lastAt, ')
           ..write('lastPreview: $lastPreview, ')
+          ..write('unreadCount: $unreadCount, ')
           ..write('leftGroup: $leftGroup, ')
           ..write('avatarBlobId: $avatarBlobId, ')
           ..write('avatarKey: $avatarKey')
@@ -2198,6 +2238,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
     groupId,
     lastAt,
     lastPreview,
+    unreadCount,
     leftGroup,
     avatarBlobId,
     avatarKey,
@@ -2214,6 +2255,7 @@ class Conversation extends DataClass implements Insertable<Conversation> {
           other.groupId == this.groupId &&
           other.lastAt == this.lastAt &&
           other.lastPreview == this.lastPreview &&
+          other.unreadCount == this.unreadCount &&
           other.leftGroup == this.leftGroup &&
           other.avatarBlobId == this.avatarBlobId &&
           other.avatarKey == this.avatarKey);
@@ -2228,6 +2270,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
   final Value<String?> groupId;
   final Value<int> lastAt;
   final Value<String> lastPreview;
+  final Value<int> unreadCount;
   final Value<bool> leftGroup;
   final Value<String?> avatarBlobId;
   final Value<String?> avatarKey;
@@ -2241,6 +2284,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     this.groupId = const Value.absent(),
     this.lastAt = const Value.absent(),
     this.lastPreview = const Value.absent(),
+    this.unreadCount = const Value.absent(),
     this.leftGroup = const Value.absent(),
     this.avatarBlobId = const Value.absent(),
     this.avatarKey = const Value.absent(),
@@ -2255,6 +2299,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     this.groupId = const Value.absent(),
     required int lastAt,
     this.lastPreview = const Value.absent(),
+    this.unreadCount = const Value.absent(),
     this.leftGroup = const Value.absent(),
     this.avatarBlobId = const Value.absent(),
     this.avatarKey = const Value.absent(),
@@ -2270,6 +2315,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     Expression<String>? groupId,
     Expression<int>? lastAt,
     Expression<String>? lastPreview,
+    Expression<int>? unreadCount,
     Expression<bool>? leftGroup,
     Expression<String>? avatarBlobId,
     Expression<String>? avatarKey,
@@ -2284,6 +2330,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
       if (groupId != null) 'group_id': groupId,
       if (lastAt != null) 'last_at': lastAt,
       if (lastPreview != null) 'last_preview': lastPreview,
+      if (unreadCount != null) 'unread_count': unreadCount,
       if (leftGroup != null) 'left_group': leftGroup,
       if (avatarBlobId != null) 'avatar_blob_id': avatarBlobId,
       if (avatarKey != null) 'avatar_key': avatarKey,
@@ -2300,6 +2347,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     Value<String?>? groupId,
     Value<int>? lastAt,
     Value<String>? lastPreview,
+    Value<int>? unreadCount,
     Value<bool>? leftGroup,
     Value<String?>? avatarBlobId,
     Value<String?>? avatarKey,
@@ -2314,6 +2362,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
       groupId: groupId ?? this.groupId,
       lastAt: lastAt ?? this.lastAt,
       lastPreview: lastPreview ?? this.lastPreview,
+      unreadCount: unreadCount ?? this.unreadCount,
       leftGroup: leftGroup ?? this.leftGroup,
       avatarBlobId: avatarBlobId ?? this.avatarBlobId,
       avatarKey: avatarKey ?? this.avatarKey,
@@ -2348,6 +2397,9 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
     if (lastPreview.present) {
       map['last_preview'] = Variable<String>(lastPreview.value);
     }
+    if (unreadCount.present) {
+      map['unread_count'] = Variable<int>(unreadCount.value);
+    }
     if (leftGroup.present) {
       map['left_group'] = Variable<bool>(leftGroup.value);
     }
@@ -2374,6 +2426,7 @@ class ConversationsCompanion extends UpdateCompanion<Conversation> {
           ..write('groupId: $groupId, ')
           ..write('lastAt: $lastAt, ')
           ..write('lastPreview: $lastPreview, ')
+          ..write('unreadCount: $unreadCount, ')
           ..write('leftGroup: $leftGroup, ')
           ..write('avatarBlobId: $avatarBlobId, ')
           ..write('avatarKey: $avatarKey, ')
@@ -4140,6 +4193,7 @@ typedef $$ConversationsTableCreateCompanionBuilder =
       Value<String?> groupId,
       required int lastAt,
       Value<String> lastPreview,
+      Value<int> unreadCount,
       Value<bool> leftGroup,
       Value<String?> avatarBlobId,
       Value<String?> avatarKey,
@@ -4155,6 +4209,7 @@ typedef $$ConversationsTableUpdateCompanionBuilder =
       Value<String?> groupId,
       Value<int> lastAt,
       Value<String> lastPreview,
+      Value<int> unreadCount,
       Value<bool> leftGroup,
       Value<String?> avatarBlobId,
       Value<String?> avatarKey,
@@ -4207,6 +4262,11 @@ class $$ConversationsTableFilterComposer
 
   ColumnFilters<String> get lastPreview => $composableBuilder(
     column: $table.lastPreview,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get unreadCount => $composableBuilder(
+    column: $table.unreadCount,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -4275,6 +4335,11 @@ class $$ConversationsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get unreadCount => $composableBuilder(
+    column: $table.unreadCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get leftGroup => $composableBuilder(
     column: $table.leftGroup,
     builder: (column) => ColumnOrderings(column),
@@ -4330,6 +4395,11 @@ class $$ConversationsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<int> get unreadCount => $composableBuilder(
+    column: $table.unreadCount,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<bool> get leftGroup =>
       $composableBuilder(column: $table.leftGroup, builder: (column) => column);
 
@@ -4381,6 +4451,7 @@ class $$ConversationsTableTableManager
                 Value<String?> groupId = const Value.absent(),
                 Value<int> lastAt = const Value.absent(),
                 Value<String> lastPreview = const Value.absent(),
+                Value<int> unreadCount = const Value.absent(),
                 Value<bool> leftGroup = const Value.absent(),
                 Value<String?> avatarBlobId = const Value.absent(),
                 Value<String?> avatarKey = const Value.absent(),
@@ -4394,6 +4465,7 @@ class $$ConversationsTableTableManager
                 groupId: groupId,
                 lastAt: lastAt,
                 lastPreview: lastPreview,
+                unreadCount: unreadCount,
                 leftGroup: leftGroup,
                 avatarBlobId: avatarBlobId,
                 avatarKey: avatarKey,
@@ -4409,6 +4481,7 @@ class $$ConversationsTableTableManager
                 Value<String?> groupId = const Value.absent(),
                 required int lastAt,
                 Value<String> lastPreview = const Value.absent(),
+                Value<int> unreadCount = const Value.absent(),
                 Value<bool> leftGroup = const Value.absent(),
                 Value<String?> avatarBlobId = const Value.absent(),
                 Value<String?> avatarKey = const Value.absent(),
@@ -4422,6 +4495,7 @@ class $$ConversationsTableTableManager
                 groupId: groupId,
                 lastAt: lastAt,
                 lastPreview: lastPreview,
+                unreadCount: unreadCount,
                 leftGroup: leftGroup,
                 avatarBlobId: avatarBlobId,
                 avatarKey: avatarKey,
